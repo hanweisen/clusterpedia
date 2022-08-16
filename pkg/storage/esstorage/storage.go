@@ -1,0 +1,95 @@
+package esstorage
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	internal "github.com/clusterpedia-io/api/clusterpedia"
+	"github.com/clusterpedia-io/clusterpedia/pkg/storage"
+	"github.com/elastic/go-elasticsearch/v8"
+	"github.com/elastic/go-elasticsearch/v8/esapi"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+type StorageFactory struct {
+	client *elasticsearch.Client
+}
+
+func (s *StorageFactory) NewResourceStorage(config *storage.ResourceStorageConfig) (storage.ResourceStorage, error) {
+	return &ResourceStorage{
+		client: s.client,
+		codec:  config.Codec,
+
+		storageGroupResource: config.StorageGroupResource,
+		storageVersion:       config.StorageVersion,
+		memoryVersion:        config.MemoryVersion,
+		indexName:            "resource",
+	}, nil
+}
+
+func (s *StorageFactory) NewCollectionResourceStorage(cr *internal.CollectionResource) (storage.CollectionResourceStorage, error) {
+	return nil, nil
+}
+
+func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string) (map[schema.GroupVersionResource]map[string]interface{}, error) {
+	return nil, nil
+}
+
+func (s *StorageFactory) CleanCluster(ctx context.Context, cluster string) error {
+	var buf bytes.Buffer
+	query := map[string]interface{}{
+		"query": map[string]interface{}{
+			"match": map[string]interface{}{
+				"metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+			},
+		},
+	}
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		return fmt.Errorf("error encoding query: %s", err)
+	}
+	req := esapi.DeleteByQueryRequest{
+		Index: []string{"resource"},
+		Body:  &buf,
+	}
+	res, err := req.Do(ctx, s.client)
+	if err != nil {
+		return err
+	}
+	if res.IsError() {
+		return fmt.Errorf(res.String())
+	}
+	return nil
+}
+
+func (s *StorageFactory) CleanClusterResource(ctx context.Context, cluster string, gvr schema.GroupVersionResource) error {
+	var buf bytes.Buffer
+	query := map[string]interface{}{
+		"query": map[string]interface{}{
+			"match": map[string]interface{}{
+				"apiVersion": gvr.GroupVersion(),
+				"kind":       gvr.Resource,
+				"metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+			},
+		},
+	}
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		return fmt.Errorf("error encoding query: %s", err)
+	}
+	req := esapi.DeleteByQueryRequest{
+		Index: []string{"resource"},
+		Body:  &buf,
+	}
+	res, err := req.Do(ctx, s.client)
+	if err != nil {
+		return err
+	}
+	if res.IsError() {
+		return fmt.Errorf(res.String())
+	}
+	return nil
+}
+
+func (s *StorageFactory) GetCollectionResources(ctx context.Context) ([]*internal.CollectionResource, error) {
+	return nil, nil
+}
