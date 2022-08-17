@@ -19,46 +19,6 @@ import (
 	"strings"
 )
 
-type Result map[string]interface{}
-
-func (r Result) GetTotal() int {
-	hits, ok := r["hits"].(map[string]interface{})
-	if !ok {
-		return 0
-	}
-	total, ok := hits["total"].(map[string]interface{})
-	if !ok {
-		return 0
-	}
-	// TODO 如何解析出value, 直接写死float64强转，感觉不太好
-	value, ok := total["value"]
-	if !ok {
-		return 0
-	}
-
-	return int(value.(float64))
-}
-
-func (r Result) GetItems() []map[string]interface{} {
-	var result = make([]map[string]interface{}, 0)
-	hits, ok := r["hits"].(map[string]interface{})
-	if !ok {
-		return result
-	}
-	hitsInternal, ok := hits["hits"].([]interface{})
-	if !ok {
-		return result
-	}
-	for i := range hitsInternal {
-		hit := hitsInternal[i].(map[string]interface{})
-		source, ok := hit["_source"].(map[string]interface{})
-		if ok {
-			result = append(result, source)
-		}
-	}
-	return result
-}
-
 type ResourceStorage struct {
 	client *elasticsearch.Client
 	codec  runtime.Codec
@@ -80,10 +40,6 @@ func (s *ResourceStorage) GetStorageConfig() *storage.ResourceStorageConfig {
 }
 
 func (s *ResourceStorage) Create(ctx context.Context, cluster string, obj runtime.Object) error {
-	gvk := obj.GetObjectKind().GroupVersionKind()
-	if gvk.Kind == "" {
-		return fmt.Errorf("%s: kind is required", gvk)
-	}
 	metaobj, err := meta.Accessor(obj)
 	if err != nil {
 		return err
@@ -93,7 +49,8 @@ func (s *ResourceStorage) Create(ctx context.Context, cluster string, obj runtim
 		annotations["shadow.clusterpedia.io/cluster-name"] = cluster
 		metaobj.SetAnnotations(annotations)
 	*/
-	body, err := json.Marshal(obj)
+	doc := s.genDocument(obj)
+	body, err := json.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("marshal json error %v", err)
 	}
@@ -140,8 +97,12 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 	objects := make([]runtime.Object, r.GetTotal(), r.GetTotal())
 	if unstructuredList, ok := listObject.(*unstructured.UnstructuredList); ok {
 		for _, item := range r.GetItems() {
+			object, exist := item["object"]
+			if !exist {
+				continue
+			}
 			uObj := &unstructured.Unstructured{}
-			byte, err := json.Marshal(item)
+			byte, err := json.Marshal(object)
 			if err != nil {
 				return err
 			}
@@ -182,8 +143,12 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 	expected := reflect.New(v.Type().Elem()).Interface().(runtime.Object)
 
 	for _, item := range r.GetItems() {
+		object, exist := item["object"]
+		if !exist {
+			continue
+		}
 		into := expected.DeepCopyObject()
-		byte, err := json.Marshal(item)
+		byte, err := json.Marshal(object)
 		if err != nil {
 			return err
 		}
@@ -242,8 +207,12 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 		//TODO return error
 		return fmt.Errorf("find more than one item")
 	}
-	for _, item := range r {
-		byte, err := json.Marshal(item)
+	for _, item := range r.GetItems() {
+		object, exist := item["object"]
+		if !exist {
+			continue
+		}
+		byte, err := json.Marshal(object)
 		if err != nil {
 			return err
 		}
@@ -252,8 +221,9 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 			return err
 		}
 		if obj != into {
-			return fmt.Errorf("Failed to decode resource, into is %T", into)
+			return fmt.Errorf("failed to decode resource, into is %v", into)
 		}
+
 	}
 	return nil
 }
@@ -276,6 +246,16 @@ func (s *ResourceStorage) Delete(ctx context.Context, cluster string, obj runtim
 
 func (s *ResourceStorage) Update(ctx context.Context, cluster string, obj runtime.Object) error {
 	return s.Create(ctx, cluster, obj)
+}
+
+func (s *ResourceStorage) genDocument(obj runtime.Object) map[string]interface{} {
+	requestBody := map[string]interface{}{
+		"group":    s.storageGroupResource.Group,
+		"version":  s.memoryVersion.Version,
+		"resource": s.storageGroupResource.Resource,
+		"object":   obj,
+	}
+	return requestBody
 }
 
 func handleErrResponse(response *esapi.Response) error {

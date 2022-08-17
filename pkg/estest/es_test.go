@@ -32,26 +32,20 @@ var mapping = `{
   },
   "mappings": {
     "properties": {
-      "group": {
-		"type": "keyword"
+      "object.group": {
+        "type": "keyword"
       },
-      "version": {
-		"type": "keyword"
+      "object.version": {
+        "type": "keyword"
       },
-      "resource": {
-		"type": "keyword"
+      "object.resource": {
+        "type": "keyword"
       },
       "object.apiVersion": {
-        "type": "text",
-        "fields": {
-          "keyword": {
-            "type": "keyword",
-            "ignore_above": 256
-          }
-        }
+        "type": "keyword"
       },
       "object.kind": {
-        "type": "keyword"
+        "type": "text"
       },
       "object.metadata.annotations": {
         "type": "flattened"
@@ -66,16 +60,34 @@ var mapping = `{
         "type": "flattened"
       },
       "object.metadata.name": {
-        "type": "keyword",
+        "type": "text",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
       },
       "object.metadata.namespace": {
-        "type": "keyword",
+        "type": "text",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
       },
       "object.metadata.ownerReferences": {
         "type": "flattened"
       },
       "object.metadata.resourceVersion": {
-        "type": "keyword",
+        "type": "text",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
       },
       "object.spec": {
         "type": "flattened"
@@ -295,8 +307,8 @@ var mappingbak = `{
 
 func getESClient() *elasticsearch.Client {
 	es, err := elasticsearch.NewClient(elasticsearch.Config{
-		Addresses: []string{"http://192.168.2.1:30200"},
-		//Addresses: []string{"http://10.211.55.4:30200"},
+		//Addresses: []string{"http://192.168.2.1:30200"},
+		Addresses: []string{"http://10.211.55.4:30200"},
 	})
 	if err != nil {
 		log.Fatalf("Error: NewClient(): %s", err)
@@ -428,7 +440,14 @@ func TestCreateDeploymentDoc(t *testing.T) {
 		"creater:":                            "hanweisen",
 	}
 	dep.UID = types.UID(uuid.New().String())
-	body, err := json.Marshal(dep)
+	requestBody := map[string]interface{}{
+		"group":    "apps",
+		"version":  "v1",
+		"resource": "deployments",
+		"object":   dep,
+	}
+
+	body, err := json.Marshal(requestBody)
 	if err != nil {
 		log.Fatalf("marshal json error %v", err)
 	}
