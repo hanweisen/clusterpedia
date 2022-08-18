@@ -10,6 +10,7 @@ import (
 	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/elastic/go-elasticsearch/v8/esapi"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -49,7 +50,7 @@ func (s *ResourceStorage) Create(ctx context.Context, cluster string, obj runtim
 		annotations["shadow.clusterpedia.io/cluster-name"] = cluster
 		metaobj.SetAnnotations(annotations)
 	*/
-	doc := s.genDocument(obj)
+	doc := s.genDocument(metaobj)
 	body, err := json.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("marshal json error %v", err)
@@ -177,9 +178,9 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 	query := map[string]interface{}{
 		"query": map[string]interface{}{
 			"match": map[string]interface{}{
-				"metadata.name":      name,
-				"metadata.namespace": namespace,
-				"metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+				"object.metadata.name":      name,
+				"object.metadata.namespace": namespace,
+				"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
 			},
 		},
 	}
@@ -248,12 +249,15 @@ func (s *ResourceStorage) Update(ctx context.Context, cluster string, obj runtim
 	return s.Create(ctx, cluster, obj)
 }
 
-func (s *ResourceStorage) genDocument(obj runtime.Object) map[string]interface{} {
+func (s *ResourceStorage) genDocument(metaobj metav1.Object) map[string]interface{} {
 	requestBody := map[string]interface{}{
-		"group":    s.storageGroupResource.Group,
-		"version":  s.memoryVersion.Version,
-		"resource": s.storageGroupResource.Resource,
-		"object":   obj,
+		"group":           s.storageGroupResource.Group,
+		"version":         s.memoryVersion.Version,
+		"resource":        s.storageGroupResource.Resource,
+		"name":            metaobj.GetName(),
+		"namespace":       metaobj.GetNamespace(),
+		"resourceVersion": metaobj.GetResourceVersion(),
+		"object":          metaobj,
 	}
 	return requestBody
 }

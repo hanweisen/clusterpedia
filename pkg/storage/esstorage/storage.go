@@ -13,7 +13,8 @@ import (
 )
 
 type StorageFactory struct {
-	client *elasticsearch.Client
+	client    *elasticsearch.Client
+	indexName string
 }
 
 func (s *StorageFactory) NewResourceStorage(config *storage.ResourceStorageConfig) (storage.ResourceStorage, error) {
@@ -24,7 +25,7 @@ func (s *StorageFactory) NewResourceStorage(config *storage.ResourceStorageConfi
 		storageGroupResource: config.StorageGroupResource,
 		storageVersion:       config.StorageVersion,
 		memoryVersion:        config.MemoryVersion,
-		indexName:            "resource",
+		indexName:            s.indexName,
 	}, nil
 }
 
@@ -33,7 +34,50 @@ func (s *StorageFactory) NewCollectionResourceStorage(cr *internal.CollectionRes
 }
 
 func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string) (map[schema.GroupVersionResource]map[string]interface{}, error) {
-	return nil, nil
+	resourceversions := make(map[schema.GroupVersionResource]map[string]interface{})
+	var buf bytes.Buffer
+	query := map[string]interface{}{
+		"query": map[string]interface{}{
+			"_source": []string{"group", "version", "resource", "namespace", "name", "resourceVersion"},
+			"match": map[string]interface{}{
+				"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+			},
+		},
+	}
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		return nil, fmt.Errorf("error encoding query: %s", err)
+	}
+	res, err := s.client.Search(
+		s.client.Search.WithContext(ctx),
+		s.client.Search.WithIndex(s.indexName),
+		s.client.Search.WithBody(&buf),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if res.IsError() {
+		return nil, fmt.Errorf(res.String())
+	}
+	defer res.Body.Close()
+	var r Result
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+		return nil, err
+	}
+	for _, item := range r.GetItems() {
+		resource := Resource(item)
+		gvr := resource.GroupVersionResource()
+		versions := resourceversions[gvr]
+		if versions == nil {
+			versions = make(map[string]interface{})
+			resourceversions[gvr] = versions
+		}
+		key := resource.GetName()
+		if resource.GetNamespace() != "" {
+			key = resource.GetNamespace() + "/" + resource.GetName()
+		}
+		versions[key] = resource.GetResourceVersion()
+	}
+	return resourceversions, nil
 }
 
 func (s *StorageFactory) CleanCluster(ctx context.Context, cluster string) error {
@@ -41,7 +85,7 @@ func (s *StorageFactory) CleanCluster(ctx context.Context, cluster string) error
 	query := map[string]interface{}{
 		"query": map[string]interface{}{
 			"match": map[string]interface{}{
-				"metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+				"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
 			},
 		},
 	}
@@ -67,9 +111,10 @@ func (s *StorageFactory) CleanClusterResource(ctx context.Context, cluster strin
 	query := map[string]interface{}{
 		"query": map[string]interface{}{
 			"match": map[string]interface{}{
-				"apiVersion": gvr.GroupVersion(),
-				"kind":       gvr.Resource,
-				"metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+				"group":    gvr.GroupVersion(),
+				"version":  gvr.Resource,
+				"resource": gvr.Resource,
+				"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
 			},
 		},
 	}

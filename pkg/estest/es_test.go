@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -32,13 +33,22 @@ var mapping = `{
   },
   "mappings": {
     "properties": {
-      "object.group": {
+      "group": {
         "type": "keyword"
       },
-      "object.version": {
+      "version": {
         "type": "keyword"
       },
-      "object.resource": {
+      "resource": {
+        "type": "keyword"
+      },
+      "name": {
+        "type": "keyword"
+      },
+      "namespace": {
+        "type": "keyword"
+      },
+      "resourceVersion": {
         "type": "keyword"
       },
       "object.apiVersion": {
@@ -307,8 +317,8 @@ var mappingbak = `{
 
 func getESClient() *elasticsearch.Client {
 	es, err := elasticsearch.NewClient(elasticsearch.Config{
-		//Addresses: []string{"http://192.168.2.1:30200"},
-		Addresses: []string{"http://10.211.55.4:30200"},
+		Addresses: []string{"http://192.168.2.1:30200"},
+		//Addresses: []string{"http://10.211.55.4:30200"},
 	})
 	if err != nil {
 		log.Fatalf("Error: NewClient(): %s", err)
@@ -440,11 +450,12 @@ func TestCreateDeploymentDoc(t *testing.T) {
 		"creater:":                            "hanweisen",
 	}
 	dep.UID = types.UID(uuid.New().String())
+	metaobj, err := meta.Accessor(dep)
 	requestBody := map[string]interface{}{
 		"group":    "apps",
 		"version":  "v1",
 		"resource": "deployments",
-		"object":   dep,
+		"object":   metaobj,
 	}
 
 	body, err := json.Marshal(requestBody)

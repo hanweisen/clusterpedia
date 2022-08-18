@@ -1,5 +1,9 @@
 package esstorage
 
+import (
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
 type Result map[string]interface{}
 
 func (r Result) GetTotal() int {
@@ -38,4 +42,35 @@ func (r Result) GetItems() []map[string]interface{} {
 		}
 	}
 	return result
+}
+
+type Resource map[string]interface{}
+
+func (r Resource) GroupVersionResource() schema.GroupVersionResource {
+	group := r["group"].(string)
+	version := r["version"].(string)
+	resource := r["resource"].(string)
+	return schema.GroupVersionResource{
+		Group:    group,
+		Version:  version,
+		Resource: resource,
+	}
+}
+
+func (r Resource) GetObject() map[string]interface{} {
+	return r["object"].(map[string]interface{})
+}
+func (r Resource) GetName() string {
+	name := r["name"].(string)
+	return name
+}
+
+func (r Resource) GetNamespace() string {
+	namespace := r["namespace"].(string)
+	return namespace
+}
+
+func (r Resource) GetResourceVersion() string {
+	rv := r["resourceVersion"].(string)
+	return rv
 }
