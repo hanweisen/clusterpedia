@@ -18,6 +18,7 @@ type StorageFactory struct {
 }
 
 func (s *StorageFactory) NewResourceStorage(config *storage.ResourceStorageConfig) (storage.ResourceStorage, error) {
+
 	return &ResourceStorage{
 		client: s.client,
 		codec:  config.Codec,
@@ -37,8 +38,8 @@ func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string
 	resourceversions := make(map[schema.GroupVersionResource]map[string]interface{})
 	var buf bytes.Buffer
 	query := map[string]interface{}{
+		"_source": []string{"group", "version", "resource", "namespace", "name", "resourceVersion"},
 		"query": map[string]interface{}{
-			"_source": []string{"group", "version", "resource", "namespace", "name", "resourceVersion"},
 			"match": map[string]interface{}{
 				"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
 			},
@@ -103,6 +104,7 @@ func (s *StorageFactory) CleanCluster(ctx context.Context, cluster string) error
 	if res.IsError() {
 		return fmt.Errorf(res.String())
 	}
+	// TODO log result
 	return nil
 }
 
@@ -110,11 +112,29 @@ func (s *StorageFactory) CleanClusterResource(ctx context.Context, cluster strin
 	var buf bytes.Buffer
 	query := map[string]interface{}{
 		"query": map[string]interface{}{
-			"match": map[string]interface{}{
-				"group":    gvr.GroupVersion(),
-				"version":  gvr.Resource,
-				"resource": gvr.Resource,
-				"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+			"bool": map[string]interface{}{
+				"must": []map[string]interface{}{
+					{
+						"match": map[string]interface{}{
+							"group": gvr.Group,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"version": gvr.Version,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"resource": gvr.Resource,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+						},
+					},
+				},
 			},
 		},
 	}
@@ -122,7 +142,7 @@ func (s *StorageFactory) CleanClusterResource(ctx context.Context, cluster strin
 		return fmt.Errorf("error encoding query: %s", err)
 	}
 	req := esapi.DeleteByQueryRequest{
-		Index: []string{"resource"},
+		Index: []string{s.indexName},
 		Body:  &buf,
 	}
 	res, err := req.Do(ctx, s.client)
@@ -132,9 +152,26 @@ func (s *StorageFactory) CleanClusterResource(ctx context.Context, cluster strin
 	if res.IsError() {
 		return fmt.Errorf(res.String())
 	}
+	// TODO log result
 	return nil
 }
 
 func (s *StorageFactory) GetCollectionResources(ctx context.Context) ([]*internal.CollectionResource, error) {
 	return nil, nil
+}
+
+func (s *StorageFactory) isIndexExist(ctx context.Context) (bool, error) {
+	res, err := s.client.Indices.Exists([]string{s.indexName},
+		s.client.Indices.Exists.WithContext(ctx))
+	if err != nil {
+		return false, err
+	}
+	if res.IsError() {
+		if res.StatusCode == 404 {
+			return false, nil
+		} else {
+			return false, fmt.Errorf(res.String())
+		}
+	}
+	return true, nil
 }

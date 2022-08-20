@@ -22,8 +22,46 @@ import (
 
 var defaultPrefix = "kubernetes"
 
+const index = "resources"
+
 // 文档id就使用uid吧
 var mapping = `{
+  "settings": {
+    "index": {
+      "number_of_shards": 1,
+      "auto_expand_replicas": "0-1",
+      "number_of_replicas": 0
+    }
+  },
+  "mappings": {
+    "properties": {
+      "group": {
+        "type": "keyword"
+      },
+      "version": {
+        "type": "keyword"
+      },
+      "resource": {
+        "type": "keyword"
+      },
+      "name": {
+        "type": "keyword"
+      },
+      "namespace": {
+        "type": "keyword"
+      },
+      "resourceVersion": {
+        "type": "keyword"
+      },
+      "object": {
+        "type": "flattened"
+      }
+    }
+  }
+}`
+
+// 文档id就使用uid吧
+var mappingbak3 = `{
   "settings": {
     "index": {
       "number_of_shards": 1,
@@ -100,6 +138,9 @@ var mapping = `{
         }
       },
       "object.spec": {
+        "type": "flattened"
+      },
+      "object.data": {
         "type": "flattened"
       },
       "object.status": {
@@ -317,8 +358,8 @@ var mappingbak = `{
 
 func getESClient() *elasticsearch.Client {
 	es, err := elasticsearch.NewClient(elasticsearch.Config{
-		Addresses: []string{"http://192.168.2.1:30200"},
-		//Addresses: []string{"http://10.211.55.4:30200"},
+		//Addresses: []string{"http://192.168.2.1:30200"},
+		Addresses: []string{"http://10.211.55.4:30200"},
 	})
 	if err != nil {
 		log.Fatalf("Error: NewClient(): %s", err)
@@ -343,7 +384,7 @@ func TestCreateIndicesAndDoc(t *testing.T) {
 	b.WriteString("doc1")
 	b.WriteString(`"}`)
 	req := esapi.IndexRequest{
-		Index:      "hanweisen-new",
+		Index:      index,
 		DocumentID: "1",
 		Body:       strings.NewReader(b.String()),
 		Refresh:    "true",
@@ -370,7 +411,7 @@ func TestCreateIndicesAndDoc(t *testing.T) {
 func TestCreateMappingIndice(t *testing.T) {
 	es := getESClient()
 	req := esapi.IndicesCreateRequest{
-		Index: "kubernetes-hanweisen",
+		Index: index,
 		Body:  strings.NewReader(mapping),
 	}
 	res, err := req.Do(context.Background(), es)
@@ -414,7 +455,7 @@ func TestCreateDoc(t *testing.T) {
 		log.Fatalf("marshal json error %v", err)
 	}
 	req := esapi.IndexRequest{
-		Index: "kubernetes-hanweisen",
+		Index: index,
 		//DocumentID: string(us.GetUID()),
 		Body: strings.NewReader(string(body)),
 	}
@@ -464,7 +505,7 @@ func TestCreateDeploymentDoc(t *testing.T) {
 	}
 	req := esapi.IndexRequest{
 		DocumentID: string(dep.UID),
-		Index:      "kubernetes-hanweisen",
+		Index:      index,
 		Body:       strings.NewReader(string(body)),
 	}
 	res, err := req.Do(context.Background(), es)
@@ -498,7 +539,7 @@ func TestResultHandle(t *testing.T) {
 	}
 	res, err := es.Search(
 		es.Search.WithContext(context.Background()),
-		es.Search.WithIndex("kubernetes-hanweisen"),
+		es.Search.WithIndex(index),
 		es.Search.WithBody(&buf),
 	)
 	if err != nil {
@@ -532,7 +573,7 @@ func TestDeleteCluster(t *testing.T) {
 		log.Fatalf("error encoding query: %s", err)
 	}
 	req := esapi.DeleteByQueryRequest{
-		Index: []string{"kubernetes-hanweisen"},
+		Index: []string{index},
 		Body:  &buf,
 	}
 	res, err := req.Do(context.Background(), es)
@@ -577,7 +618,7 @@ func TestDeleteClusterGVK(t *testing.T) {
 		log.Fatalf("error encoding query: %s", err)
 	}
 	req := esapi.DeleteByQueryRequest{
-		Index: []string{"kubernetes-hanweisen"},
+		Index: []string{index},
 		Body:  &buf,
 	}
 	res, err := req.Do(context.Background(), es)
@@ -630,4 +671,19 @@ func NewDeployment(namespace string, name string) *appsv1.Deployment {
 			},
 		},
 	}
+}
+
+func TestIndexExist(t *testing.T) {
+	es := getESClient()
+	res, err := es.Indices.Exists([]string{index},
+		es.Indices.Exists.WithContext(context.Background()))
+	if err != nil {
+		log.Fatalf("err %v", err)
+	}
+	if res.IsError() {
+		log.Printf("res err %s", res.String())
+	} else {
+		log.Printf("result %s", res.String())
+	}
+
 }
