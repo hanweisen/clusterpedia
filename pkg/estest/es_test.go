@@ -50,7 +50,7 @@ var mapping = `{
       "namespace": {
         "type": "keyword"
       },
-      "resourceVersion": {
+      "resource_version": {
         "type": "keyword"
       },
       "object": {
@@ -526,6 +526,7 @@ func TestCreateDeploymentDoc(t *testing.T) {
 
 }
 
+/*
 func TestResultHandle(t *testing.T) {
 	query := map[string]interface{}{
 		"query": map[string]interface{}{
@@ -558,6 +559,7 @@ func TestResultHandle(t *testing.T) {
 		log.Printf("item: %v", item)
 	}
 }
+*/
 
 func TestDeleteCluster(t *testing.T) {
 	es := getESClient()
@@ -686,4 +688,63 @@ func TestIndexExist(t *testing.T) {
 		log.Printf("result %s", res.String())
 	}
 
+}
+
+func TestSearchResponse(t *testing.T) {
+	es := getESClient()
+	var buf bytes.Buffer
+	query := map[string]interface{}{
+		"query": map[string]interface{}{
+			"match": map[string]interface{}{
+				"resource": "configmaps",
+			},
+		},
+	}
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		log.Fatalf("error encoding query: %s", err)
+	}
+	res, err := es.Search(
+		es.Search.WithIndex(index),
+		es.Search.WithBody(&buf),
+	)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	if res.IsError() {
+		log.Fatalf("%v", err)
+	}
+	var r esstorage.SearchResponse
+	defer res.Body.Close()
+
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+		log.Fatalf("%v", err)
+	}
+	println(r.Hits.Total.Value)
+	println(r.Hits.Hits[0].Source.Name)
+}
+
+func TestSearchResponseString(t *testing.T) {
+	es := getESClient()
+	var buf bytes.Buffer
+	query := map[string]interface{}{
+		"query": map[string]interface{}{
+			"match": map[string]interface{}{
+				"resource": "configmaps",
+			},
+		},
+	}
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		log.Fatalf("error encoding query: %s", err)
+	}
+	res, err := es.Search(
+		es.Search.WithIndex(index),
+		es.Search.WithBody(&buf),
+	)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	if res.IsError() {
+		log.Fatalf("%v", err)
+	}
+	log.Print(res.String())
 }

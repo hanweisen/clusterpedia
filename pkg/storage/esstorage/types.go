@@ -4,73 +4,72 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-type Result map[string]interface{}
-
-func (r Result) GetTotal() int {
-	hits, ok := r["hits"].(map[string]interface{})
-	if !ok {
-		return 0
-	}
-	total, ok := hits["total"].(map[string]interface{})
-	if !ok {
-		return 0
-	}
-	// TODO 如何解析出value, 直接写死float64强转，感觉不太好
-	value, ok := total["value"]
-	if !ok {
-		return 0
-	}
-
-	return int(value.(float64))
+type SearchResponse struct {
+	Took    int  `json:"took"`
+	TimeOut bool `json:"time_out"`
+	Hits    Hits `json:"hits"`
 }
 
-func (r Result) GetItems() []map[string]interface{} {
-	var result = make([]map[string]interface{}, 0)
-	hits, ok := r["hits"].(map[string]interface{})
-	if !ok {
-		return result
-	}
-	hitsInternal, ok := hits["hits"].([]interface{})
-	if !ok {
-		return result
-	}
-	for i := range hitsInternal {
-		hit := hitsInternal[i].(map[string]interface{})
-		source, ok := hit["_source"].(map[string]interface{})
-		if ok {
-			result = append(result, source)
-		}
-	}
-	return result
+type Hits struct {
+	Total    Total   `json:"total"`
+	MaxScore float32 `json:"max_score"`
+	Hits     []Hit   `json:"hits"`
 }
 
-type Resource map[string]interface{}
+type Total struct {
+	Value    int    `json:"value,omitempty"`
+	Relation string `json:"relation,omitempty"`
+}
+
+type Hit struct {
+	Index  string   `json:"_index"`
+	Id     string   `json:"_id"`
+	Score  float32  `json:"_score"`
+	Source Resource `json:"_source"`
+}
+
+func (r *SearchResponse) GetTotal() int {
+	return r.Hits.Total.Value
+}
+
+func (r *SearchResponse) GetResources() []*Resource {
+	hits := r.Hits.Hits
+	resources := make([]*Resource, len(hits))
+	for i := range hits {
+		resources[i] = &hits[i].Source
+	}
+	return resources
+}
+
+type Resource struct {
+	Group           string `json:"group"`
+	Version         string `json:"version"`
+	Resource        string `json:"resource"`
+	ResourceVersion string `json:"resource_version"`
+	Name            string `json:"name"`
+	Namespace       string `json:"namespace"`
+	Object          map[string]interface{}
+}
 
 func (r Resource) GroupVersionResource() schema.GroupVersionResource {
-	group := r["group"].(string)
-	version := r["version"].(string)
-	resource := r["resource"].(string)
 	return schema.GroupVersionResource{
-		Group:    group,
-		Version:  version,
-		Resource: resource,
+		Group:    r.Group,
+		Version:  r.Version,
+		Resource: r.Resource,
 	}
 }
 
 func (r Resource) GetObject() map[string]interface{} {
-	return r["object"].(map[string]interface{})
+	return r.Object
 }
 func (r Resource) GetName() string {
-	name := r["name"].(string)
-	return name
+	return r.Name
 }
 
 func (r Resource) GetNamespace() string {
-	namespace := r["namespace"].(string)
-	return namespace
+	return r.Namespace
 }
 
 func (r Resource) GetResourceVersion() string {
-	rv := r["resourceVersion"].(string)
-	return rv
+	return r.ResourceVersion
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/elastic/go-elasticsearch/v8/esapi"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/klog/v2"
 )
 
 type StorageFactory struct {
@@ -41,7 +42,7 @@ func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string
 		"_source": []string{"group", "version", "resource", "namespace", "name", "resourceVersion"},
 		"query": map[string]interface{}{
 			"match": map[string]interface{}{
-				"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+				"Object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
 			},
 		},
 	}
@@ -60,12 +61,12 @@ func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string
 		return nil, fmt.Errorf(res.String())
 	}
 	defer res.Body.Close()
-	var r Result
+	var r SearchResponse
 	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return nil, err
 	}
-	for _, item := range r.GetItems() {
-		resource := Resource(item)
+	for _, item := range r.Hits.Hits {
+		resource := item.Source
 		gvr := resource.GroupVersionResource()
 		versions := resourceversions[gvr]
 		if versions == nil {
@@ -86,7 +87,7 @@ func (s *StorageFactory) CleanCluster(ctx context.Context, cluster string) error
 	query := map[string]interface{}{
 		"query": map[string]interface{}{
 			"match": map[string]interface{}{
-				"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+				"Object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
 			},
 		},
 	}
@@ -102,9 +103,9 @@ func (s *StorageFactory) CleanCluster(ctx context.Context, cluster string) error
 		return err
 	}
 	if res.IsError() {
-		return fmt.Errorf(res.String())
+		return fmt.Errorf("clean cluster %v failure, response: %v", cluster, res.String())
 	}
-	// TODO log result
+	klog.V(4).Info("clean cluster %v success, response: %v", cluster, res.String())
 	return nil
 }
 
@@ -131,7 +132,7 @@ func (s *StorageFactory) CleanClusterResource(ctx context.Context, cluster strin
 					},
 					{
 						"match": map[string]interface{}{
-							"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+							"Object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
 						},
 					},
 				},
@@ -150,9 +151,9 @@ func (s *StorageFactory) CleanClusterResource(ctx context.Context, cluster strin
 		return err
 	}
 	if res.IsError() {
-		return fmt.Errorf(res.String())
+		return fmt.Errorf("clean cluster %s resource %s/%s failure, response: %s", cluster, gvr.GroupVersion(), gvr.Resource, res.String())
 	}
-	// TODO log result
+	klog.V(4).Info("clean cluster %s resource %s/%s success, response: %s", cluster, gvr.GroupVersion(), gvr.Resource, res.String())
 	return nil
 }
 

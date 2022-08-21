@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	genericstorage "k8s.io/apiserver/pkg/storage"
+	"k8s.io/klog/v2"
 	"reflect"
 	"strings"
 )
@@ -41,37 +42,31 @@ func (s *ResourceStorage) GetStorageConfig() *storage.ResourceStorageConfig {
 }
 
 func (s *ResourceStorage) Create(ctx context.Context, cluster string, obj runtime.Object) error {
-	metaobj, err := meta.Accessor(obj)
-	if err != nil {
-		return err
-	}
-	/*
-		annotations := metaobj.GetAnnotations()
-		annotations["shadow.clusterpedia.io/cluster-name"] = cluster
-		metaobj.SetAnnotations(annotations)
-	*/
-	doc := s.genDocument(metaobj)
-	body, err := json.Marshal(doc)
-	if err != nil {
-		return fmt.Errorf("marshal json error %v", err)
-	}
-
-	req := esapi.IndexRequest{
-		DocumentID: string(metaobj.GetUID()),
-		Body:       strings.NewReader(string(body)),
-		Index:      s.indexName,
-	}
-	res, err := req.Do(ctx, s.client)
-	if err != nil {
-		return err
-	}
-	return handleErrResponse(res)
+	return s.upsert(ctx, cluster, obj)
 }
 
 func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, opts *internal.ListOptions) error {
 	query := map[string]interface{}{
 		"query": map[string]interface{}{
-			"match_all": struct{}{},
+			"bool": map[string]interface{}{
+				"must": []map[string]interface{}{
+					{
+						"match": map[string]interface{}{
+							"group": s.storageGroupResource.Group,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"version": s.storageVersion.Version,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"resource": s.storageGroupResource.Resource,
+						},
+					},
+				},
+			},
 		},
 	}
 	var buf bytes.Buffer
@@ -90,18 +85,15 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 		return fmt.Errorf(res.String())
 	}
 	defer res.Body.Close()
-	var r Result
+	var r SearchResponse
 	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return err
 	}
 
-	objects := make([]runtime.Object, r.GetTotal(), r.GetTotal())
+	objects := make([]runtime.Object, r.GetTotal())
 	if unstructuredList, ok := listObject.(*unstructured.UnstructuredList); ok {
-		for _, item := range r.GetItems() {
-			object, exist := item["object"]
-			if !exist {
-				continue
-			}
+		for _, resource := range r.GetResources() {
+			object := resource.GetObject()
 			uObj := &unstructured.Unstructured{}
 			byte, err := json.Marshal(object)
 			if err != nil {
@@ -123,7 +115,7 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 			}
 			uObj, ok := object.(*unstructured.Unstructured)
 			if !ok {
-				return genericstorage.NewInternalError("the converted object is not *unstructured.Unstructured")
+				return genericstorage.NewInternalError("the converted Object is not *unstructured.Unstructured")
 			}
 			unstructuredList.Items = append(unstructuredList.Items, *uObj)
 		}
@@ -143,11 +135,8 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 	slice := reflect.MakeSlice(v.Type(), len(objects), len(objects))
 	expected := reflect.New(v.Type().Elem()).Interface().(runtime.Object)
 
-	for _, item := range r.GetItems() {
-		object, exist := item["object"]
-		if !exist {
-			continue
-		}
+	for _, resource := range r.GetResources() {
+		object := resource.GetObject()
 		into := expected.DeepCopyObject()
 		byte, err := json.Marshal(object)
 		if err != nil {
@@ -158,7 +147,7 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 			return err
 		}
 		if obj != into {
-			return fmt.Errorf("Failed to decode resource, into is %T", into)
+			return fmt.Errorf("failed to decode resource, into is %T", into)
 		}
 		objects = append(objects, into)
 
@@ -178,9 +167,9 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 	query := map[string]interface{}{
 		"query": map[string]interface{}{
 			"match": map[string]interface{}{
-				"object.metadata.name":      name,
-				"object.metadata.namespace": namespace,
-				"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+				"Object.metadata.name":      name,
+				"Object.metadata.namespace": namespace,
+				"Object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
 			},
 		},
 	}
@@ -199,7 +188,7 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 		return fmt.Errorf(res.String())
 	}
 	defer res.Body.Close()
-	var r Result
+	var r SearchResponse
 	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return err
 	}
@@ -208,11 +197,9 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 		//TODO return error
 		return fmt.Errorf("find more than one item")
 	}
-	for _, item := range r.GetItems() {
-		object, exist := item["object"]
-		if !exist {
-			continue
-		}
+	for _, resource := range r.GetResources() {
+		object := resource.Object
+
 		byte, err := json.Marshal(object)
 		if err != nil {
 			return err
@@ -242,17 +229,50 @@ func (s *ResourceStorage) Delete(ctx context.Context, cluster string, obj runtim
 	if err != nil {
 		return err
 	}
-	return handleErrResponse(res)
+	if res.IsError() {
+		return fmt.Errorf("delete failure, response: %v", res.String())
+	}
+	klog.V(4).Info("delete success, response: %v", res.String())
+	return nil
 }
 
 func (s *ResourceStorage) Update(ctx context.Context, cluster string, obj runtime.Object) error {
-	return s.Create(ctx, cluster, obj)
+	return s.upsert(ctx, cluster, obj)
+}
+
+func (s *ResourceStorage) upsert(ctx context.Context, cluster string, obj runtime.Object) error {
+	metaobj, err := meta.Accessor(obj)
+	if err != nil {
+		return err
+	}
+
+	resource := s.genDocument(metaobj)
+	body, err := json.Marshal(resource)
+	if err != nil {
+		return fmt.Errorf("marshal json error %v", err)
+	}
+
+	req := esapi.IndexRequest{
+		DocumentID: string(metaobj.GetUID()),
+		Body:       strings.NewReader(string(body)),
+		Index:      s.indexName,
+	}
+	res, err := req.Do(ctx, s.client)
+	if err != nil {
+		return err
+	}
+
+	if res.IsError() {
+		return fmt.Errorf("upsert failure, response: %v", res.String())
+	}
+	klog.V(4).Info("upsert success, response: %v", res.String())
+	return nil
 }
 
 func (s *ResourceStorage) genDocument(metaobj metav1.Object) map[string]interface{} {
 	requestBody := map[string]interface{}{
 		"group":           s.storageGroupResource.Group,
-		"version":         s.memoryVersion.Version,
+		"version":         s.storageVersion.Version,
 		"resource":        s.storageGroupResource.Resource,
 		"name":            metaobj.GetName(),
 		"namespace":       metaobj.GetNamespace(),
@@ -260,13 +280,4 @@ func (s *ResourceStorage) genDocument(metaobj metav1.Object) map[string]interfac
 		"object":          metaobj,
 	}
 	return requestBody
-}
-
-func handleErrResponse(response *esapi.Response) error {
-	defer response.Body.Close()
-	if response.IsError() {
-		errMsg := response.String()
-		return fmt.Errorf(errMsg)
-	}
-	return nil
 }
