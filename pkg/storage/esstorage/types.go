@@ -6,6 +6,25 @@ import (
 
 type Result map[string]interface{}
 
+type ResourceType struct {
+	Group    string
+	Version  string
+	Resource string
+	Kind     string
+}
+
+func (rt ResourceType) Empty() bool {
+	return rt == ResourceType{}
+}
+
+func (rt ResourceType) GroupVersionResource() schema.GroupVersionResource {
+	return schema.GroupVersionResource{
+		Group:    rt.Group,
+		Version:  rt.Version,
+		Resource: rt.Resource,
+	}
+}
+
 func (r Result) GetTotal() int {
 	hits, ok := r["hits"].(map[string]interface{})
 	if !ok {
@@ -73,4 +92,33 @@ func (r Resource) GetNamespace() string {
 func (r Resource) GetResourceVersion() string {
 	rv := r["resourceVersion"].(string)
 	return rv
+}
+
+func (r Resource) GetVersion() string {
+	rv := r["version"].(string)
+	return rv
+}
+
+func (r Resource) GetGroup() string {
+	rv := r["group"].(string)
+	return rv
+}
+
+func (r Resource) GetResource() string {
+	rv := r["resources"].(string)
+	return rv
+}
+
+func (r Resource) GetKind() string {
+	rv := r["kind"].(string)
+	return rv
+}
+
+func (r Resource) GetResourceType() ResourceType {
+	return ResourceType{
+		Group:    r.GetGroup(),
+		Version:  r.GetVersion(),
+		Resource: r.GetResource(),
+		Kind:     r.GetKind(),
+	}
 }
