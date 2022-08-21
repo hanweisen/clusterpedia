@@ -135,29 +135,32 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 	slice := reflect.MakeSlice(v.Type(), len(objects), len(objects))
 	expected := reflect.New(v.Type().Elem()).Interface().(runtime.Object)
 
-	for _, resource := range r.GetResources() {
+	for i, resource := range r.GetResources() {
 		object := resource.GetObject()
-		into := expected.DeepCopyObject()
 		byte, err := json.Marshal(object)
 		if err != nil {
 			return err
 		}
-		obj, _, err := s.codec.Decode(byte, nil, into)
+		obj, _, err := s.codec.Decode(byte, nil, expected.DeepCopyObject())
 		if err != nil {
 			return err
 		}
-		if obj != into {
-			return fmt.Errorf("failed to decode resource, into is %T", into)
-		}
-		objects = append(objects, into)
+		/*
+			if obj != into {
+				return fmt.Errorf("failed to decode resource, into is %T", into)
+			}
+		*/
+		slice.Index(i).Set(reflect.ValueOf(obj).Elem())
 
 	}
-	for i, object := range objects {
-		if err != nil {
-			return err
+	/*
+		for i, object := range objects {
+			if err != nil {
+				return err
+			}
+			slice.Index(i).Set(reflect.ValueOf(object).Elem())
 		}
-		slice.Index(i).Set(reflect.ValueOf(object).Elem())
-	}
+	*/
 	v.Set(slice)
 	return nil
 }
