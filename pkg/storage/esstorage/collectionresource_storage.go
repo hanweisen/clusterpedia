@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
-
 	"github.com/elastic/go-elasticsearch/v8"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -34,26 +32,20 @@ func NewCollectionResourceStorage(client *elasticsearch.Client, indexName string
 
 func (s *CollectionResourceStorage) Get(ctx context.Context, opts *internal.ListOptions) (*internal.CollectionResource, error) {
 	var boolShouldConditionArrays []interface{}
-	queryCondition := map[string]interface{}{"must": boolShouldConditionArrays}
-	query := map[string]interface{}{
-		"query": map[string]interface{}{
-			"bool": queryCondition,
-		},
-	}
 
 	for _, rt := range s.collectionResource.ResourceTypes {
 		var boolMustConditionArrays []interface{}
 		boolMustConditionArrays = append(boolMustConditionArrays, map[string]interface{}{
-			"term": map[string]interface{}{"group": rt.Group},
+			"match": map[string]interface{}{"group": rt.Group},
 		})
 		if rt.Resource != "" {
 			boolMustConditionArrays = append(boolMustConditionArrays, map[string]interface{}{
-				"term": map[string]interface{}{"resource": rt.Resource},
+				"match": map[string]interface{}{"resource": rt.Resource},
 			})
 		}
 		if rt.Version != "" {
 			boolMustConditionArrays = append(boolMustConditionArrays, map[string]interface{}{
-				"term": map[string]interface{}{"resource": rt.Version},
+				"match": map[string]interface{}{"version": rt.Version},
 			})
 		}
 		mustCondition := map[string]interface{}{
@@ -63,13 +55,20 @@ func (s *CollectionResourceStorage) Get(ctx context.Context, opts *internal.List
 		boolShouldConditionArrays = append(boolShouldConditionArrays, mustCondition)
 	}
 
-	if opts.Limit != -1 {
-		queryCondition["size"] = int(opts.Limit)
-	}
+	//if opts.Limit != -1 {
+	//	queryCondition["size"] = int(opts.Limit)
+	//}
+	//
+	//offset, err := strconv.Atoi(opts.Continue)
+	//if err == nil {
+	//	queryCondition["from"] = offset
+	//}
 
-	offset, err := strconv.Atoi(opts.Continue)
-	if err == nil {
-		queryCondition["from"] = offset
+	queryCondition := map[string]interface{}{"should": boolShouldConditionArrays}
+	query := map[string]interface{}{
+		"query": map[string]interface{}{
+			"bool": queryCondition,
+		},
 	}
 
 	var buf bytes.Buffer
@@ -88,7 +87,7 @@ func (s *CollectionResourceStorage) Get(ctx context.Context, opts *internal.List
 		return nil, fmt.Errorf(res.String())
 	}
 	defer res.Body.Close()
-	var r Result
+	var r SearchResponse
 	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return nil, err
 	}
@@ -98,14 +97,11 @@ func (s *CollectionResourceStorage) Get(ctx context.Context, opts *internal.List
 	collection := &internal.CollectionResource{
 		TypeMeta:   s.collectionResource.TypeMeta,
 		ObjectMeta: s.collectionResource.ObjectMeta,
-		Items:      make([]runtime.Object, 0, len(r.GetItems())),
+		Items:      make([]runtime.Object, 0, len(r.GetResources())),
 	}
 
-	for _, item := range r.GetItems() {
-		object, exist := item["object"]
-		if !exist {
-			continue
-		}
+	for _, item := range r.GetResources() {
+		object := item.Object
 
 		byte, err := json.Marshal(object)
 		if err != nil {
@@ -117,10 +113,8 @@ func (s *CollectionResourceStorage) Get(ctx context.Context, opts *internal.List
 		}
 		objects = append(objects, unObj)
 
-		resource := Resource(item)
-
 		gvrs := make(map[schema.GroupVersionResource]struct{})
-		if resourceType := resource.GetResourceType(); !resourceType.Empty() {
+		if resourceType := item.GetResourceType(); !resourceType.Empty() {
 			gvr := resourceType.GroupVersionResource()
 			if _, ok := gvrs[gvr]; !ok {
 				gvrs[gvr] = struct{}{}
@@ -135,11 +129,11 @@ func (s *CollectionResourceStorage) Get(ctx context.Context, opts *internal.List
 	}
 	collection.Items = objects
 
-	if opts.WithContinue != nil && *opts.WithContinue {
-		if int64(len(objects)) == opts.Limit {
-			collection.Continue = strconv.FormatInt(int64(offset)+opts.Limit, 10)
-		}
-	}
+	//if opts.WithContinue != nil && *opts.WithContinue {
+	//	if int64(len(objects)) == opts.Limit {
+	//		collection.Continue = strconv.FormatInt(int64(offset)+opts.Limit, 10)
+	//	}
+	//}
 
 	//todo
 	//if amount != nil {

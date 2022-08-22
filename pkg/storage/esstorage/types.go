@@ -4,7 +4,92 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-type Result map[string]interface{}
+type SearchResponse struct {
+	Took    int  `json:"took"`
+	TimeOut bool `json:"time_out"`
+	Hits    Hits `json:"hits"`
+}
+
+type Hits struct {
+	Total    Total   `json:"total"`
+	MaxScore float32 `json:"max_score"`
+	Hits     []Hit   `json:"hits"`
+}
+
+type Total struct {
+	Value    int    `json:"value,omitempty"`
+	Relation string `json:"relation,omitempty"`
+}
+
+type Hit struct {
+	Index  string   `json:"_index"`
+	Id     string   `json:"_id"`
+	Score  float32  `json:"_score"`
+	Source Resource `json:"_source"`
+}
+
+func (r *SearchResponse) GetTotal() int {
+	return r.Hits.Total.Value
+}
+
+func (r *SearchResponse) GetResources() []*Resource {
+	hits := r.Hits.Hits
+	resources := make([]*Resource, len(hits))
+	for i := range hits {
+		resources[i] = &hits[i].Source
+	}
+	return resources
+}
+
+type Resource struct {
+	Group           string `json:"group"`
+	Version         string `json:"version"`
+	Kind            string `json:"kind"`
+	Resource        string `json:"resource"`
+	ResourceVersion string `json:"resource_version"`
+	Name            string `json:"name"`
+	Namespace       string `json:"namespace"`
+	Object          map[string]interface{}
+}
+
+func (r Resource) GroupVersionResource() schema.GroupVersionResource {
+	return schema.GroupVersionResource{
+		Group:    r.Group,
+		Version:  r.Version,
+		Resource: r.Resource,
+	}
+}
+
+func (r Resource) GetObject() map[string]interface{} {
+	return r.Object
+}
+func (r Resource) GetName() string {
+	return r.Name
+}
+
+func (r Resource) GetNamespace() string {
+	return r.Namespace
+}
+
+func (r Resource) GetResourceVersion() string {
+	return r.ResourceVersion
+}
+
+func (r Resource) GetVersion() string {
+	return r.Version
+}
+
+func (r Resource) GetGroup() string {
+	return r.Group
+}
+
+func (r Resource) GetResource() string {
+	return r.Resource
+}
+
+func (r Resource) GetKind() string {
+	return r.Kind
+}
 
 type ResourceType struct {
 	Group    string
@@ -17,108 +102,19 @@ func (rt ResourceType) Empty() bool {
 	return rt == ResourceType{}
 }
 
-func (rt ResourceType) GroupVersionResource() schema.GroupVersionResource {
-	return schema.GroupVersionResource{
-		Group:    rt.Group,
-		Version:  rt.Version,
-		Resource: rt.Resource,
-	}
-}
-
-func (r Result) GetTotal() int {
-	hits, ok := r["hits"].(map[string]interface{})
-	if !ok {
-		return 0
-	}
-	total, ok := hits["total"].(map[string]interface{})
-	if !ok {
-		return 0
-	}
-	// TODO 如何解析出value, 直接写死float64强转，感觉不太好
-	value, ok := total["value"]
-	if !ok {
-		return 0
-	}
-
-	return int(value.(float64))
-}
-
-func (r Result) GetItems() []map[string]interface{} {
-	var result = make([]map[string]interface{}, 0)
-	hits, ok := r["hits"].(map[string]interface{})
-	if !ok {
-		return result
-	}
-	hitsInternal, ok := hits["hits"].([]interface{})
-	if !ok {
-		return result
-	}
-	for i := range hitsInternal {
-		hit := hitsInternal[i].(map[string]interface{})
-		source, ok := hit["_source"].(map[string]interface{})
-		if ok {
-			result = append(result, source)
-		}
-	}
-	return result
-}
-
-type Resource map[string]interface{}
-
-func (r Resource) GroupVersionResource() schema.GroupVersionResource {
-	group := r["group"].(string)
-	version := r["version"].(string)
-	resource := r["resource"].(string)
-	return schema.GroupVersionResource{
-		Group:    group,
-		Version:  version,
-		Resource: resource,
-	}
-}
-
-func (r Resource) GetObject() map[string]interface{} {
-	return r["object"].(map[string]interface{})
-}
-func (r Resource) GetName() string {
-	name := r["name"].(string)
-	return name
-}
-
-func (r Resource) GetNamespace() string {
-	namespace := r["namespace"].(string)
-	return namespace
-}
-
-func (r Resource) GetResourceVersion() string {
-	rv := r["resourceVersion"].(string)
-	return rv
-}
-
-func (r Resource) GetVersion() string {
-	rv := r["version"].(string)
-	return rv
-}
-
-func (r Resource) GetGroup() string {
-	rv := r["group"].(string)
-	return rv
-}
-
-func (r Resource) GetResource() string {
-	rv := r["resources"].(string)
-	return rv
-}
-
-func (r Resource) GetKind() string {
-	rv := r["kind"].(string)
-	return rv
-}
-
 func (r Resource) GetResourceType() ResourceType {
 	return ResourceType{
 		Group:    r.GetGroup(),
 		Version:  r.GetVersion(),
 		Resource: r.GetResource(),
 		Kind:     r.GetKind(),
+	}
+}
+
+func (rt ResourceType) GroupVersionResource() schema.GroupVersionResource {
+	return schema.GroupVersionResource{
+		Group:    rt.Group,
+		Version:  rt.Version,
+		Resource: rt.Resource,
 	}
 }
