@@ -145,22 +145,9 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 		if err != nil {
 			return err
 		}
-		/*
-			if obj != into {
-				return fmt.Errorf("failed to decode resource, into is %T", into)
-			}
-		*/
 		slice.Index(i).Set(reflect.ValueOf(obj).Elem())
 
 	}
-	/*
-		for i, object := range objects {
-			if err != nil {
-				return err
-			}
-			slice.Index(i).Set(reflect.ValueOf(object).Elem())
-		}
-	*/
 	v.Set(slice)
 	return nil
 }
@@ -169,10 +156,24 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 	var buf bytes.Buffer
 	query := map[string]interface{}{
 		"query": map[string]interface{}{
-			"match": map[string]interface{}{
-				"Object.metadata.name":      name,
-				"Object.metadata.namespace": namespace,
-				"Object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+			"bool": map[string]interface{}{
+				"must": []map[string]interface{}{
+					{
+						"match": map[string]interface{}{
+							"Object.metadata.name": name,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"Object.metadata.namespace": namespace,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"Object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+						},
+					},
+				},
 			},
 		},
 	}
