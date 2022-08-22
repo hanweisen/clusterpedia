@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	_ "github.com/clusterpedia-io/clusterpedia/pkg/storage/esstorage"
 	_ "github.com/clusterpedia-io/clusterpedia/pkg/storage/internalstorage"
 )
 
