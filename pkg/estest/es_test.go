@@ -54,7 +54,8 @@ var mapping = `{
         "type": "keyword"
       },
       "object": {
-        "type": "flattened"
+        "type": "flattened",
+        "ignore_above": 1024
       }
     }
   }

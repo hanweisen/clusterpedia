@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	genericstorage "k8s.io/apiserver/pkg/storage"
 	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/pkg/apis/core"
 	"reflect"
 	"strings"
 )
@@ -160,17 +161,32 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 				"must": []map[string]interface{}{
 					{
 						"match": map[string]interface{}{
-							"Object.metadata.name": name,
+							"group": s.storageGroupResource.Group,
 						},
 					},
 					{
 						"match": map[string]interface{}{
-							"Object.metadata.namespace": namespace,
+							"version": s.storageVersion.Version,
 						},
 					},
 					{
 						"match": map[string]interface{}{
-							"Object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+							"resource": s.storageGroupResource.Resource,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"object.metadata.name": name,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"object.metadata.namespace": namespace,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
 						},
 					},
 				},
@@ -201,6 +217,9 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 		//TODO return error
 		return fmt.Errorf("find more than one item")
 	}
+	if cnt == 0 {
+
+	}
 	for _, resource := range r.GetResources() {
 		object := resource.Object
 
@@ -209,11 +228,25 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 			return err
 		}
 		obj, _, err := s.codec.Decode(byte, nil, into)
+
 		if err != nil {
 			return err
 		}
 		if obj != into {
 			return fmt.Errorf("failed to decode resource, into is %v", into)
+		}
+		configmap, ok := obj.(*core.ConfigMap)
+		if ok {
+			data := map[string]string{}
+			for k, v := range configmap.Data {
+				if strings.HasPrefix(k, "\\.") {
+					newKey := strings.TrimPrefix(k, "\\")
+					data[newKey] = v
+				} else {
+					data[k] = v
+				}
+			}
+			configmap.Data = data
 		}
 
 	}
@@ -255,6 +288,27 @@ func (s *ResourceStorage) upsert(ctx context.Context, cluster string, obj runtim
 		return err
 	}
 
+	if gvk.Kind == "Secret" || gvk.Kind == "ConfigMap" {
+		unstructured, ok := obj.(*unstructured.Unstructured)
+		if ok {
+			dataInter, exist := unstructured.Object["data"]
+			if exist {
+				data := dataInter.(map[string]interface{})
+				dataNew := map[string]interface{}{}
+				for k, v := range data {
+					if strings.HasPrefix(k, ".") {
+						newK := "\\" + k
+						dataNew[newK] = v
+					} else {
+						dataNew[k] = v
+					}
+				}
+				unstructured.Object["data"] = dataNew
+			}
+		}
+
+	}
+
 	resource := s.genDocument(metaobj, gvk)
 	body, err := json.Marshal(resource)
 	if err != nil {
@@ -272,6 +326,10 @@ func (s *ResourceStorage) upsert(ctx context.Context, cluster string, obj runtim
 	}
 
 	if res.IsError() {
+		if gvk.Kind != "ConfigMap" && gvk.Kind != "Secret" {
+			klog.Info("gvk %s", gvk.Kind)
+			println("ok")
+		}
 		return fmt.Errorf("upsert failure, response: %v", res.String())
 	}
 	klog.V(4).Info("upsert success, response: %v", res.String())
