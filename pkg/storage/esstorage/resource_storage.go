@@ -245,12 +245,17 @@ func (s *ResourceStorage) Update(ctx context.Context, cluster string, obj runtim
 }
 
 func (s *ResourceStorage) upsert(ctx context.Context, cluster string, obj runtime.Object) error {
+	gvk := obj.GetObjectKind().GroupVersionKind()
+	if gvk.Kind == "" {
+		return fmt.Errorf("%s: kind is required", gvk)
+	}
+
 	metaobj, err := meta.Accessor(obj)
 	if err != nil {
 		return err
 	}
 
-	resource := s.genDocument(metaobj)
+	resource := s.genDocument(metaobj, gvk)
 	body, err := json.Marshal(resource)
 	if err != nil {
 		return fmt.Errorf("marshal json error %v", err)
@@ -273,11 +278,12 @@ func (s *ResourceStorage) upsert(ctx context.Context, cluster string, obj runtim
 	return nil
 }
 
-func (s *ResourceStorage) genDocument(metaobj metav1.Object) map[string]interface{} {
+func (s *ResourceStorage) genDocument(metaobj metav1.Object, gvk schema.GroupVersionKind) map[string]interface{} {
 	requestBody := map[string]interface{}{
 		"group":           s.storageGroupResource.Group,
 		"version":         s.storageVersion.Version,
 		"resource":        s.storageGroupResource.Resource,
+		"kind":            gvk.Kind,
 		"name":            metaobj.GetName(),
 		"namespace":       metaobj.GetNamespace(),
 		"resourceVersion": metaobj.GetResourceVersion(),
