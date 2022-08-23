@@ -44,6 +44,7 @@ func (r *SearchResponse) GetResources() []*Resource {
 type Resource struct {
 	Group           string `json:"group"`
 	Version         string `json:"version"`
+	Kind            string `json:"kind"`
 	Resource        string `json:"resource"`
 	ResourceVersion string `json:"resource_version"`
 	Name            string `json:"name"`
@@ -72,4 +73,48 @@ func (r Resource) GetNamespace() string {
 
 func (r Resource) GetResourceVersion() string {
 	return r.ResourceVersion
+}
+
+func (r Resource) GetVersion() string {
+	return r.Version
+}
+
+func (r Resource) GetGroup() string {
+	return r.Group
+}
+
+func (r Resource) GetResource() string {
+	return r.Resource
+}
+
+func (r Resource) GetKind() string {
+	return r.Kind
+}
+
+type ResourceType struct {
+	Group    string
+	Version  string
+	Resource string
+	Kind     string
+}
+
+func (rt ResourceType) Empty() bool {
+	return rt == ResourceType{}
+}
+
+func (r Resource) GetResourceType() ResourceType {
+	return ResourceType{
+		Group:    r.GetGroup(),
+		Version:  r.GetVersion(),
+		Resource: r.GetResource(),
+		Kind:     r.GetKind(),
+	}
+}
+
+func (rt ResourceType) GroupVersionResource() schema.GroupVersionResource {
+	return schema.GroupVersionResource{
+		Group:    rt.Group,
+		Version:  rt.Version,
+		Resource: rt.Resource,
+	}
 }

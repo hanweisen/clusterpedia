@@ -32,7 +32,7 @@ func (s *StorageFactory) NewResourceStorage(config *storage.ResourceStorageConfi
 }
 
 func (s *StorageFactory) NewCollectionResourceStorage(cr *internal.CollectionResource) (storage.CollectionResourceStorage, error) {
-	return nil, nil
+	return NewCollectionResourceStorage(s.client, s.indexName, cr), nil
 }
 
 func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string) (map[schema.GroupVersionResource]map[string]interface{}, error) {
@@ -158,7 +158,11 @@ func (s *StorageFactory) CleanClusterResource(ctx context.Context, cluster strin
 }
 
 func (s *StorageFactory) GetCollectionResources(ctx context.Context) ([]*internal.CollectionResource, error) {
-	return nil, nil
+	var crs []*internal.CollectionResource
+	for _, cr := range collectionResources {
+		crs = append(crs, cr.DeepCopy())
+	}
+	return crs, nil
 }
 
 func (s *StorageFactory) isIndexExist(ctx context.Context) (bool, error) {
