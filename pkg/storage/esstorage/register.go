@@ -16,15 +16,16 @@ func init() {
 
 func NewStorageFactory(configPath string) (storage.StorageFactory, error) {
 	return &StorageFactory{
-		client:    getESClient(),
-		indexName: "resources",
+		client:     getESClient(),
+		indexAlias: "clusterpedia_resource",
 	}, nil
 }
 
 func getESClient() *elasticsearch.Client {
 	es, err := elasticsearch.NewClient(elasticsearch.Config{
 		//Addresses: []string{"http://192.168.2.1:30200"},
-		Addresses: []string{"http://100.71.10.30:30200"},
+		//Addresses: []string{"http://100.71.10.30:30200"},
+		Addresses: []string{"http://100.71.10.46:9200"},
 	})
 	if err != nil {
 		log.Fatalf("Error: NewClient(): %s", err)

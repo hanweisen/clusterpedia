@@ -282,33 +282,10 @@ func (s *ResourceStorage) upsert(ctx context.Context, cluster string, obj runtim
 	if gvk.Kind == "" {
 		return fmt.Errorf("%s: kind is required", gvk)
 	}
-
 	metaobj, err := meta.Accessor(obj)
 	if err != nil {
 		return err
 	}
-
-	if gvk.Kind == "Secret" || gvk.Kind == "ConfigMap" {
-		unstructured, ok := obj.(*unstructured.Unstructured)
-		if ok {
-			dataInter, exist := unstructured.Object["data"]
-			if exist {
-				data := dataInter.(map[string]interface{})
-				dataNew := map[string]interface{}{}
-				for k, v := range data {
-					if strings.HasPrefix(k, ".") {
-						newK := "\\" + k
-						dataNew[newK] = v
-					} else {
-						dataNew[k] = v
-					}
-				}
-				unstructured.Object["data"] = dataNew
-			}
-		}
-
-	}
-
 	resource := s.genDocument(metaobj, gvk)
 	body, err := json.Marshal(resource)
 	if err != nil {
@@ -326,11 +303,9 @@ func (s *ResourceStorage) upsert(ctx context.Context, cluster string, obj runtim
 	}
 
 	if res.IsError() {
-		if gvk.Kind != "ConfigMap" && gvk.Kind != "Secret" {
-			klog.Info("gvk %s", gvk.Kind)
-			println("ok")
-		}
-		return fmt.Errorf("upsert failure, response: %v", res.String())
+		msg := fmt.Sprintf("upsert %s/%s %s/%s failure, response: %v", s.storageGroupResource.Group, s.storageGroupResource.Resource, metaobj.GetNamespace(), metaobj.GetName(), res.String())
+		klog.Error(msg)
+		return fmt.Errorf(msg)
 	}
 	klog.V(4).Info("upsert success, response: %v", res.String())
 	return nil

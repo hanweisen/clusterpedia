@@ -5,38 +5,48 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	internal "github.com/clusterpedia-io/api/clusterpedia"
-	"github.com/clusterpedia-io/clusterpedia/pkg/storage"
+
 	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/elastic/go-elasticsearch/v8/esapi"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/klog/v2"
+
+	internal "github.com/clusterpedia-io/api/clusterpedia"
+	"github.com/clusterpedia-io/clusterpedia/pkg/storage"
 )
 
+const indexPrefix = "clusterpedia"
+
 type StorageFactory struct {
-	client    *elasticsearch.Client
-	indexName string
+	client     *elasticsearch.Client
+	indexAlias string
 }
 
 func (s *StorageFactory) NewResourceStorage(config *storage.ResourceStorageConfig) (storage.ResourceStorage, error) {
-
-	return &ResourceStorage{
+	storage := &ResourceStorage{
 		client: s.client,
 		codec:  config.Codec,
 
 		storageGroupResource: config.StorageGroupResource,
 		storageVersion:       config.StorageVersion,
 		memoryVersion:        config.MemoryVersion,
-		indexName:            s.indexName,
-	}, nil
+	}
+	// indexAlias: ${prefix}-${group}-${resource}
+	storage.indexName = fmt.Sprintf("%s-%s-%s", indexPrefix, config.StorageGroupResource.Group, config.StorageGroupResource.Resource)
+	var mapping = GetIndexMapping(s.indexAlias, config.GroupResource)
+	err := EnsureIndex(s.client, mapping, storage.indexName)
+	if err != nil {
+		return nil, err
+	}
+	return storage, nil
 }
 
 func (s *StorageFactory) NewCollectionResourceStorage(cr *internal.CollectionResource) (storage.CollectionResourceStorage, error) {
-	return NewCollectionResourceStorage(s.client, s.indexName, cr), nil
+	return NewCollectionResourceStorage(s.client, s.indexAlias, cr), nil
 }
 
 func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string) (map[schema.GroupVersionResource]map[string]interface{}, error) {
-	resourceversions := make(map[schema.GroupVersionResource]map[string]interface{})
+	resourceVersions := make(map[schema.GroupVersionResource]map[string]interface{})
 	var buf bytes.Buffer
 	query := map[string]interface{}{
 		"_source": []string{"group", "version", "resource", "namespace", "name", "resourceVersion"},
@@ -51,14 +61,18 @@ func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string
 	}
 	res, err := s.client.Search(
 		s.client.Search.WithContext(ctx),
-		s.client.Search.WithIndex(s.indexName),
+		s.client.Search.WithIndex(s.indexAlias),
 		s.client.Search.WithBody(&buf),
 	)
 	if err != nil {
 		return nil, err
 	}
 	if res.IsError() {
-		return nil, fmt.Errorf(res.String())
+		if res.StatusCode == 404 {
+			return resourceVersions, nil
+		} else {
+			return nil, fmt.Errorf(res.String())
+		}
 	}
 	defer res.Body.Close()
 	var r SearchResponse
@@ -68,10 +82,10 @@ func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string
 	for _, item := range r.Hits.Hits {
 		resource := item.Source
 		gvr := resource.GroupVersionResource()
-		versions := resourceversions[gvr]
+		versions := resourceVersions[gvr]
 		if versions == nil {
 			versions = make(map[string]interface{})
-			resourceversions[gvr] = versions
+			resourceVersions[gvr] = versions
 		}
 		key := resource.GetName()
 		if resource.GetNamespace() != "" {
@@ -79,7 +93,7 @@ func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string
 		}
 		versions[key] = resource.GetResourceVersion()
 	}
-	return resourceversions, nil
+	return resourceVersions, nil
 }
 
 func (s *StorageFactory) CleanCluster(ctx context.Context, cluster string) error {
@@ -95,7 +109,7 @@ func (s *StorageFactory) CleanCluster(ctx context.Context, cluster string) error
 		return fmt.Errorf("error encoding query: %s", err)
 	}
 	req := esapi.DeleteByQueryRequest{
-		Index: []string{"resource"},
+		Index: []string{s.indexAlias},
 		Body:  &buf,
 	}
 	res, err := req.Do(ctx, s.client)
@@ -143,7 +157,7 @@ func (s *StorageFactory) CleanClusterResource(ctx context.Context, cluster strin
 		return fmt.Errorf("error encoding query: %s", err)
 	}
 	req := esapi.DeleteByQueryRequest{
-		Index: []string{s.indexName},
+		Index: []string{s.indexAlias},
 		Body:  &buf,
 	}
 	res, err := req.Do(ctx, s.client)
@@ -166,7 +180,7 @@ func (s *StorageFactory) GetCollectionResources(ctx context.Context) ([]*interna
 }
 
 func (s *StorageFactory) isIndexExist(ctx context.Context) (bool, error) {
-	res, err := s.client.Indices.Exists([]string{s.indexName},
+	res, err := s.client.Indices.Exists([]string{s.indexAlias},
 		s.client.Indices.Exists.WithContext(ctx))
 	if err != nil {
 		return false, err
