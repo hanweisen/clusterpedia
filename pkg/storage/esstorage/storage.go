@@ -30,6 +30,7 @@ func (s *StorageFactory) NewResourceStorage(config *storage.ResourceStorageConfi
 		storageGroupResource: config.StorageGroupResource,
 		storageVersion:       config.StorageVersion,
 		memoryVersion:        config.MemoryVersion,
+		resourceAlias:        s.indexAlias,
 	}
 	// indexAlias: ${prefix}-${group}-${resource}
 	storage.indexName = fmt.Sprintf("%s-%s-%s", indexPrefix, config.StorageGroupResource.Group, config.StorageGroupResource.Resource)
@@ -45,6 +46,7 @@ func (s *StorageFactory) NewCollectionResourceStorage(cr *internal.CollectionRes
 	return NewCollectionResourceStorage(s.client, s.indexAlias, cr), nil
 }
 
+//TODO 返回结果应该是有些问题的，不能返回全部数据，导致informer无法正确的更新数据，应该加上limit!
 func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string) (map[schema.GroupVersionResource]map[string]interface{}, error) {
 	resourceVersions := make(map[schema.GroupVersionResource]map[string]interface{})
 	var buf bytes.Buffer
