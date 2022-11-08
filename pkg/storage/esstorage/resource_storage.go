@@ -15,10 +15,16 @@ import (
 	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
 	genericstorage "k8s.io/apiserver/pkg/storage"
 	"k8s.io/klog/v2"
 	"reflect"
+	"strconv"
 	"strings"
+)
+
+var (
+	supportedOrderByFields = sets.NewString("cluster", "namespace", "name", "created_at", "resource_version")
 )
 
 type ResourceStorage struct {
@@ -30,6 +36,11 @@ type ResourceStorage struct {
 	memoryVersion        schema.GroupVersion
 
 	indexName string
+}
+
+type QueryItem struct {
+	key      string
+	criteria interface{}
 }
 
 func (s *ResourceStorage) GetStorageConfig() *storage.ResourceStorageConfig {
@@ -47,8 +58,7 @@ func (s *ResourceStorage) Create(ctx context.Context, cluster string, obj runtim
 
 func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, opts *internal.ListOptions) error {
 	// TODO
-	query := map[string]interface{}{}
-
+	query := s.genListQuery(opts)
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(query); err != nil {
 		return fmt.Errorf("error encoding query: %s", err)
@@ -132,43 +142,110 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 	return nil
 }
 
-func (s *ResourceStorage) genListQuery(ctx context.Context, opts *internal.ListOptions) (map[string]interface{}, error) {
+func (s *ResourceStorage) genListQuery(opts *internal.ListOptions) map[string]interface{} {
+	var quayIts []*QueryItem
 	// 这篇文档搞定in https://www.elastic.co/guide/cn/elasticsearch/guide/current/_finding_multiple_exact_values.html
 	// cluster的精确与in
+	switch len(opts.ClusterNames) {
+	case 0:
+	case 1:
+		//query = query.Where("cluster = ?", opts.ClusterNames[0])
+		item := &QueryItem{
+			key:      "object.metadata.annotations.shadow.clusterpedia.io/cluster-name",
+			criteria: opts.ClusterNames[0],
+		}
+		quayIts = append(quayIts, item)
+	default:
+		//query = query.Where("cluster IN ?", opts.ClusterNames)
+		item := &QueryItem{
+			key:      "object.metadata.annotations.shadow.clusterpedia.io/cluster-name",
+			criteria: opts.ClusterNames,
+		}
+		quayIts = append(quayIts, item)
+	}
 	// namespace的精确与in
+	switch len(opts.Namespaces) {
+	case 0:
+	case 1:
+		item := &QueryItem{
+			key:      "namespace",
+			criteria: opts.Namespaces[0],
+		}
+		quayIts = append(quayIts, item)
+	default:
+		item := &QueryItem{
+			key:      "namespace",
+			criteria: opts.Namespaces,
+		}
+		quayIts = append(quayIts, item)
+	}
 	// name的精确与in
+	switch len(opts.Names) {
+	case 0:
+	case 1:
+		item := &QueryItem{
+			key:      "name",
+			criteria: opts.Names[0],
+		}
+		quayIts = append(quayIts, item)
+	default:
+		item := &QueryItem{
+			key:      "name",
+			criteria: opts.Names,
+		}
+		quayIts = append(quayIts, item)
+	}
 	// 创建时间比较 created_at >= < ？？有点向同步时间？？
 	// 原生sql的查询
 	// LabelSelector的查询
 	// opts.ExtraLabelSelector 我不知道是啥
 	// fieldSelector的查询
 	// ownerfeference相关的查询，这个目前还做不到！！
+
+	item := &QueryItem{
+		key:      "version",
+		criteria: s.storageVersion.Version,
+	}
+	quayIts = append(quayIts, item)
+	var critters []map[string]interface{}
+	for i := range quayIts {
+		var word string
+		if _, ok := quayIts[i].criteria.([]string); ok {
+			word = "terms"
+		} else {
+			word = "term"
+		}
+		criteria := map[string]interface{}{
+			word: map[string]interface{}{
+				quayIts[i].key: quayIts[i].criteria,
+			},
+		}
+		critters = append(critters, criteria)
+	}
 	// 设置排序，limit与offset
+	size := 500
+	if opts.Limit != -1 {
+		size = int(opts.Limit)
+	}
+	offset, _ := strconv.Atoi(opts.Continue)
+
+	for _, orderby := range opts.OrderBy {
+		field := orderby.Field
+		if supportedOrderByFields.Has(field) {
+			//TODO add sort
+		}
+	}
 
 	query := map[string]interface{}{
+		"size": size,
+		"from": offset,
 		"query": map[string]interface{}{
 			"bool": map[string]interface{}{
-				"must": []map[string]interface{}{
-					{
-						"match": map[string]interface{}{
-							"group": s.storageGroupResource.Group,
-						},
-					},
-					{
-						"match": map[string]interface{}{
-							"version": s.storageVersion.Version,
-						},
-					},
-					{
-						"match": map[string]interface{}{
-							"resource": s.storageGroupResource.Resource,
-						},
-					},
-				},
+				"must": critters,
 			},
 		},
 	}
-	return query, nil
+	return query
 }
 
 func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name string, into runtime.Object) error {
@@ -178,32 +255,32 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 			"bool": map[string]interface{}{
 				"must": []map[string]interface{}{
 					{
-						"match": map[string]interface{}{
+						"term": map[string]interface{}{
 							"group": s.storageGroupResource.Group,
 						},
 					},
 					{
-						"match": map[string]interface{}{
+						"term": map[string]interface{}{
 							"version": s.storageVersion.Version,
 						},
 					},
 					{
-						"match": map[string]interface{}{
+						"term": map[string]interface{}{
 							"resource": s.storageGroupResource.Resource,
 						},
 					},
 					{
-						"match": map[string]interface{}{
+						"term": map[string]interface{}{
 							"object.metadata.name": name,
 						},
 					},
 					{
-						"match": map[string]interface{}{
+						"term": map[string]interface{}{
 							"object.metadata.namespace": namespace,
 						},
 					},
 					{
-						"match": map[string]interface{}{
+						"term": map[string]interface{}{
 							"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
 						},
 					},
