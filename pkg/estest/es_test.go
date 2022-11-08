@@ -24,8 +24,10 @@ var defaultPrefix = "kubernetes"
 
 const index = "resources"
 
-// 文档id就使用uid吧
 var mapping = `{
+  "aliases": {
+	"clusterpedia_resource": {}
+  },
   "settings": {
     "index": {
       "number_of_shards": 1,
@@ -54,8 +56,107 @@ var mapping = `{
         "type": "keyword"
       },
       "object": {
-        "type": "flattened",
-        "ignore_above": 1024
+        "properties": {
+          "metadata": {
+            "properties": {
+              "annotations": {
+                "type": "flattened"
+              },
+              "creationTimestamp": {
+                "type": "text"
+              },
+              "deletionTimestamp": {
+                "type": "text"
+              },
+              "labels": {
+                "type": "flattened"
+              },
+              "name": {
+                "type": "text",
+                "fields": {
+                  "keyword": {
+                    "type": "keyword",
+                    "ignore_above": 256
+                  }
+                }
+              },
+              "namespace": {
+                "type": "text",
+                "fields": {
+                  "keyword": {
+                    "type": "keyword",
+                    "ignore_above": 256
+                  }
+                }
+              },
+              "ownerReferences": {
+                "type": "text"
+              },
+              "resourceVersion": {
+                "type": "text",
+                "fields": {
+                  "keyword": {
+                    "type": "keyword",
+                    "ignore_above": 256
+                  }
+                }
+              }
+            }
+          },
+          "spec":{
+                "type":"object",
+                "enabled":false
+          }
+        }
+      }
+    }
+  }
+}
+`
+
+// 文档id就使用uid吧
+var mapping_bak20201031 = `{
+  "settings": {
+    "index": {
+      "number_of_shards": 1,
+      "auto_expand_replicas": "0-1",
+      "number_of_replicas": 0
+    }
+  },
+  "mappings": {
+    "properties": {
+      "group": {
+        "type": "keyword"
+      },
+      "version": {
+        "type": "keyword"
+      },
+      "resource": {
+        "type": "keyword"
+      },
+      "name": {
+        "type": "keyword"
+      },
+      "namespace": {
+        "type": "keyword"
+      },
+      "resource_version": {
+        "type": "keyword"
+      },
+      "object": {
+		"annotations":{
+			"type":"object",
+			"enabled":false
+		},
+		"name":{
+			"type":"text",
+			"fields":{
+				"keyword":{
+					"type":"keyword",
+					"ignore_above":256
+				}
+			}
+		}
       }
     }
   }
@@ -360,7 +461,8 @@ var mappingbak = `{
 func getESClient() *elasticsearch.Client {
 	es, err := elasticsearch.NewClient(elasticsearch.Config{
 		//Addresses: []string{"http://192.168.2.1:30200"},
-		Addresses: []string{"http://100.71.10.30:30200"},
+		//Addresses: []string{"http://100.71.10.30:30200"},
+		Addresses: []string{"http://100.71.10.46:9200"},
 	})
 	if err != nil {
 		log.Fatalf("Error: NewClient(): %s", err)
