@@ -17,7 +17,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	genericstorage "k8s.io/apiserver/pkg/storage"
 	"k8s.io/klog/v2"
-	"k8s.io/kubernetes/pkg/apis/core"
 	"reflect"
 	"strings"
 )
@@ -47,29 +46,9 @@ func (s *ResourceStorage) Create(ctx context.Context, cluster string, obj runtim
 }
 
 func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, opts *internal.ListOptions) error {
-	query := map[string]interface{}{
-		"query": map[string]interface{}{
-			"bool": map[string]interface{}{
-				"must": []map[string]interface{}{
-					{
-						"match": map[string]interface{}{
-							"group": s.storageGroupResource.Group,
-						},
-					},
-					{
-						"match": map[string]interface{}{
-							"version": s.storageVersion.Version,
-						},
-					},
-					{
-						"match": map[string]interface{}{
-							"resource": s.storageGroupResource.Resource,
-						},
-					},
-				},
-			},
-		},
-	}
+	// TODO
+	query := map[string]interface{}{}
+
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(query); err != nil {
 		return fmt.Errorf("error encoding query: %s", err)
@@ -153,6 +132,45 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 	return nil
 }
 
+func (s *ResourceStorage) genListQuery(ctx context.Context, opts *internal.ListOptions) (map[string]interface{}, error) {
+	// 这篇文档搞定in https://www.elastic.co/guide/cn/elasticsearch/guide/current/_finding_multiple_exact_values.html
+	// cluster的精确与in
+	// namespace的精确与in
+	// name的精确与in
+	// 创建时间比较 created_at >= < ？？有点向同步时间？？
+	// 原生sql的查询
+	// LabelSelector的查询
+	// opts.ExtraLabelSelector 我不知道是啥
+	// fieldSelector的查询
+	// ownerfeference相关的查询，这个目前还做不到！！
+	// 设置排序，limit与offset
+
+	query := map[string]interface{}{
+		"query": map[string]interface{}{
+			"bool": map[string]interface{}{
+				"must": []map[string]interface{}{
+					{
+						"match": map[string]interface{}{
+							"group": s.storageGroupResource.Group,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"version": s.storageVersion.Version,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"resource": s.storageGroupResource.Resource,
+						},
+					},
+				},
+			},
+		},
+	}
+	return query, nil
+}
+
 func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name string, into runtime.Object) error {
 	var buf bytes.Buffer
 	query := map[string]interface{}{
@@ -218,7 +236,7 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 		return fmt.Errorf("find more than one item")
 	}
 	if cnt == 0 {
-
+		return fmt.Errorf("can not fi")
 	}
 	for _, resource := range r.GetResources() {
 		object := resource.Object
@@ -235,20 +253,6 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 		if obj != into {
 			return fmt.Errorf("failed to decode resource, into is %v", into)
 		}
-		configmap, ok := obj.(*core.ConfigMap)
-		if ok {
-			data := map[string]string{}
-			for k, v := range configmap.Data {
-				if strings.HasPrefix(k, "\\.") {
-					newKey := strings.TrimPrefix(k, "\\")
-					data[newKey] = v
-				} else {
-					data[k] = v
-				}
-			}
-			configmap.Data = data
-		}
-
 	}
 	return nil
 }
