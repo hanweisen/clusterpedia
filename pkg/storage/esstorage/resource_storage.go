@@ -7,6 +7,7 @@ import (
 	"fmt"
 	internal "github.com/clusterpedia-io/api/clusterpedia"
 	"github.com/clusterpedia-io/clusterpedia/pkg/storage"
+	"github.com/clusterpedia-io/clusterpedia/pkg/storage/internalstorage"
 	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/elastic/go-elasticsearch/v8/esapi"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -27,6 +28,15 @@ var (
 	supportedOrderByFields = sets.NewString("cluster", "namespace", "name", "created_at", "resource_version")
 )
 
+// TODO 如何支持多种查询关键字
+type CriteriaType int
+
+const (
+	Term = iota
+	Fuzzy
+	Match
+)
+
 type ResourceStorage struct {
 	client *elasticsearch.Client
 	codec  runtime.Codec
@@ -40,8 +50,9 @@ type ResourceStorage struct {
 }
 
 type QueryItem struct {
-	key      string
-	criteria interface{}
+	criteriaType CriteriaType
+	key          string
+	criteria     interface{}
 }
 
 func (s *ResourceStorage) GetStorageConfig() *storage.ResourceStorageConfig {
@@ -203,7 +214,25 @@ func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOpt
 	// 创建时间比较 created_at >= < ？？有点向同步时间？？
 	// 原生sql的查询
 	// LabelSelector的查询
-	// opts.ExtraLabelSelector 我不知道是啥
+	// opts.ExtraLabelSelector
+	if opts.ExtraLabelSelector != nil {
+		if requirements, selectable := opts.ExtraLabelSelector.Requirements(); selectable {
+			for _, require := range requirements {
+				switch require.Key() {
+				case internalstorage.SearchLabelFuzzyName:
+					for _, name := range require.Values().List() {
+						name = strings.TrimSpace(name)
+						item := &QueryItem{
+							criteriaType: Fuzzy,
+							key:          "name",
+							criteria:     name,
+						}
+						quayIts = append(quayIts, item)
+					}
+				}
+			}
+		}
+	}
 	// fieldSelector的查询
 	// ownerfeference相关的查询
 	if len(opts.ClusterNames) == 1 && (len(opts.OwnerUID) != 0 || len(opts.OwnerName) != 0) {
@@ -231,10 +260,14 @@ func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOpt
 	var critters []map[string]interface{}
 	for i := range quayIts {
 		var word string
-		if _, ok := quayIts[i].criteria.([]string); ok {
-			word = "terms"
+		if quayIts[i].criteriaType == Fuzzy {
+			word = "fuzzy"
 		} else {
-			word = "term"
+			if _, ok := quayIts[i].criteria.([]string); ok {
+				word = "terms"
+			} else {
+				word = "term"
+			}
 		}
 		criteria := map[string]interface{}{
 			word: map[string]interface{}{
