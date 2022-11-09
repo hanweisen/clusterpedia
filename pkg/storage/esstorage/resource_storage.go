@@ -102,8 +102,21 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return err
 	}
+	list, err := meta.ListAccessor(listObject)
+	if err != nil {
+		return err
+	}
+	offset, err := strconv.Atoi(opts.Continue)
+	if opts.WithContinue != nil && *opts.WithContinue {
+		if int64(len(r.GetResources())) == opts.Limit {
+			list.SetContinue(strconv.FormatInt(int64(offset)+opts.Limit, 10))
+		}
+	}
 
-	objects := make([]runtime.Object, r.GetTotal())
+	remain := r.GetTotal() - int64(offset) - int64(len(r.GetResources()))
+	list.SetRemainingItemCount(&remain)
+
+	objects := make([]runtime.Object, len(r.GetResources()))
 	if unstructuredList, ok := listObject.(*unstructured.UnstructuredList); ok {
 		for _, resource := range r.GetResources() {
 			object := resource.GetObject()
@@ -168,33 +181,17 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOptions) map[string]interface{} {
 	var quayIts []*QueryItem
 	// 这篇文档搞定in https://www.elastic.co/guide/cn/elasticsearch/guide/current/_finding_multiple_exact_values.html
-	// cluster的精确与in
 	switch len(opts.ClusterNames) {
 	case 0:
-	case 1:
-		//query = query.Where("cluster = ?", opts.ClusterNames[0])
-		item := &QueryItem{
-			key:      "object.metadata.annotations.shadow.clusterpedia.io/cluster-name",
-			criteria: opts.ClusterNames[0],
-		}
-		quayIts = append(quayIts, item)
 	default:
-		//query = query.Where("cluster IN ?", opts.ClusterNames)
 		item := &QueryItem{
 			key:      "object.metadata.annotations.shadow.clusterpedia.io/cluster-name",
 			criteria: opts.ClusterNames,
 		}
 		quayIts = append(quayIts, item)
 	}
-	// namespace的精确与in
 	switch len(opts.Namespaces) {
 	case 0:
-	case 1:
-		item := &QueryItem{
-			key:      "namespace",
-			criteria: opts.Namespaces[0],
-		}
-		quayIts = append(quayIts, item)
 	default:
 		item := &QueryItem{
 			key:      "namespace",
@@ -202,15 +199,8 @@ func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOpt
 		}
 		quayIts = append(quayIts, item)
 	}
-	// name的精确与in
 	switch len(opts.Names) {
 	case 0:
-	case 1:
-		item := &QueryItem{
-			key:      "name",
-			criteria: opts.Names[0],
-		}
-		quayIts = append(quayIts, item)
 	default:
 		item := &QueryItem{
 			key:      "name",
@@ -320,19 +310,103 @@ func (s *ResourceStorage) GetOwnerIds(ctx context.Context, opts *internal.ListOp
 		result, err := s.getUIDs(ctx, opts.ClusterNames[0], []string{opts.OwnerUID}, opts.OwnerSeniority)
 		return result, err
 	case opts.OwnerName != "":
-		var ownerNamespaces []string
-		if len(opts.Namespaces) != 0 {
-			// match namespaced and clustered owner resources
-			ownerNamespaces = append(opts.Namespaces, "")
-		}
-		fmt.Println(ownerNamespaces)
-		//ownerQuery = buildOwnerQueryByName(db, opts.ClusterNames[0], ownerNamespaces, opts.OwnerGroupResource, opts.OwnerName, opts.OwnerSeniority)
-		return empty, nil
+		result, err := s.getUIDsByName(ctx, opts)
+		return result, err
 
 	default:
 		return empty, nil
 	}
 }
+
+func (s *ResourceStorage) getUIDsByName(ctx context.Context, opts *internal.ListOptions) ([]string, error) {
+	cluster := opts.ClusterNames[0]
+	var quayIts []*QueryItem
+	if len(opts.Namespaces) != 0 {
+		filter := &QueryItem{
+			key:      "namespace",
+			criteria: opts.Namespaces,
+		}
+		quayIts = append(quayIts, filter)
+	}
+	if !opts.OwnerGroupResource.Empty() {
+		groupResource := opts.OwnerGroupResource
+		groupFilter := &QueryItem{
+			key:      "group",
+			criteria: groupResource.Group,
+		}
+		resourceFilter := &QueryItem{
+			key:      "resource",
+			criteria: groupResource.Resource,
+		}
+		quayIts = append(quayIts, groupFilter, resourceFilter)
+	}
+	filter := &QueryItem{
+		key:      "name",
+		criteria: opts.OwnerName,
+	}
+	quayIts = append(quayIts, filter)
+	filter = &QueryItem{
+		key:      "object.metadata.annotations.shadow.clusterpedia.io/cluster-name",
+		criteria: cluster,
+	}
+	quayIts = append(quayIts, filter)
+
+	var mustFilters []map[string]interface{}
+	for i := range quayIts {
+		var word string
+		if _, ok := quayIts[i].criteria.([]string); ok {
+			word = "terms"
+		} else {
+			word = "term"
+		}
+		criteria := map[string]interface{}{
+			word: map[string]interface{}{
+				quayIts[i].key: quayIts[i].criteria,
+			},
+		}
+		mustFilters = append(mustFilters, criteria)
+	}
+	query := map[string]interface{}{
+		"size":    500,
+		"_source": []string{"object.metadata.uid"},
+		"query": map[string]interface{}{
+			"bool": map[string]interface{}{
+				"must": mustFilters,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		return nil, fmt.Errorf("error encoding query: %s", err)
+	}
+	res, err := s.client.Search(
+		s.client.Search.WithContext(ctx),
+		s.client.Search.WithIndex(s.resourceAlias),
+		s.client.Search.WithBody(&buf),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if res.IsError() {
+		return nil, fmt.Errorf(res.String())
+	}
+	defer res.Body.Close()
+	var r SearchResponse
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+		return nil, err
+	}
+	var uids []string
+	for _, resource := range r.GetResources() {
+		// TODO 简单处理数据获取，
+		object := resource.GetObject()
+		uidmap := object["metadata"].(map[string]interface{})
+		uid := uidmap["uid"].(string)
+		uids = append(uids, uid)
+	}
+	return s.getUIDs(ctx, cluster, uids, opts.OwnerSeniority)
+}
+
 func (s *ResourceStorage) getUIDs(ctx context.Context, cluster string, uids []string, seniority int) ([]string, error) {
 	if seniority == 0 {
 		return uids, nil
@@ -447,7 +521,7 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return err
 	}
-	cnt := r.GetTotal()
+	cnt := len(r.GetResources())
 	if cnt > 1 {
 		//TODO return error
 		return fmt.Errorf("find more than one item")

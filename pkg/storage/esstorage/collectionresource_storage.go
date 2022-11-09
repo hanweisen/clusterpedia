@@ -92,7 +92,7 @@ func (s *CollectionResourceStorage) Get(ctx context.Context, opts *internal.List
 		return nil, err
 	}
 
-	objects := make([]runtime.Object, r.GetTotal(), r.GetTotal())
+	objects := make([]runtime.Object, len(r.GetResources()))
 
 	collection := &internal.CollectionResource{
 		TypeMeta:   s.collectionResource.TypeMeta,
