@@ -37,6 +37,12 @@ const (
 	Match
 )
 
+type Operator int
+
+const (
+	Equal = iota
+)
+
 type ResourceStorage struct {
 	client *elasticsearch.Client
 	codec  runtime.Codec
@@ -51,6 +57,7 @@ type ResourceStorage struct {
 
 type QueryItem struct {
 	criteriaType CriteriaType
+	operator     Operator
 	key          string
 	criteria     interface{}
 }
@@ -257,7 +264,8 @@ func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOpt
 		criteria: s.storageGroupResource.Resource,
 	}
 	quayIts = append(quayIts, item)
-	var critters []map[string]interface{}
+	var mustFilter []map[string]interface{}
+	var notFilter []map[string]interface{}
 	for i := range quayIts {
 		var word string
 		if quayIts[i].criteriaType == Fuzzy {
@@ -274,7 +282,7 @@ func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOpt
 				quayIts[i].key: quayIts[i].criteria,
 			},
 		}
-		critters = append(critters, criteria)
+		mustFilter = append(mustFilter, criteria)
 	}
 	// 设置排序，limit与offset
 	size := 500
@@ -295,7 +303,8 @@ func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOpt
 		"from": offset,
 		"query": map[string]interface{}{
 			"bool": map[string]interface{}{
-				"must": critters,
+				"must":     mustFilter,
+				"must_not": notFilter,
 			},
 		},
 	}
