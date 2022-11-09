@@ -11,7 +11,7 @@ type SearchResponse struct {
 }
 
 type Hits struct {
-	Total    Total   `json:"total"`
+	Total    *Total  `json:"total"`
 	MaxScore float32 `json:"max_score"`
 	Hits     []*Hit  `json:"hits"`
 }
@@ -28,11 +28,11 @@ type Hit struct {
 	Source *Resource `json:"_source"`
 }
 
-func (r *SearchResponse) GetTotal() int {
-	if r.Hits == nil || r.Hits.Hits == nil {
+func (r *SearchResponse) GetTotal() int64 {
+	if r.Hits == nil || r.Hits.Total == nil {
 		return 0
 	}
-	return len(r.Hits.Hits)
+	return int64(r.Hits.Total.Value)
 }
 
 func (r *SearchResponse) GetResources() []*Resource {

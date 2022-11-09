@@ -102,8 +102,21 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return err
 	}
+	list, err := meta.ListAccessor(listObject)
+	if err != nil {
+		return err
+	}
+	offset, err := strconv.Atoi(opts.Continue)
+	if opts.WithContinue != nil && *opts.WithContinue {
+		if int64(len(r.GetResources())) == opts.Limit {
+			list.SetContinue(strconv.FormatInt(int64(offset)+opts.Limit, 10))
+		}
+	}
 
-	objects := make([]runtime.Object, r.GetTotal())
+	remain := r.GetTotal() - int64(offset) - int64(len(r.GetResources()))
+	list.SetRemainingItemCount(&remain)
+
+	objects := make([]runtime.Object, len(r.GetResources()))
 	if unstructuredList, ok := listObject.(*unstructured.UnstructuredList); ok {
 		for _, resource := range r.GetResources() {
 			object := resource.GetObject()
@@ -508,7 +521,7 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return err
 	}
-	cnt := r.GetTotal()
+	cnt := len(r.GetResources())
 	if cnt > 1 {
 		//TODO return error
 		return fmt.Errorf("find more than one item")
