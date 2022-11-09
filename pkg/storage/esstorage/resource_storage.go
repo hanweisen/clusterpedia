@@ -7,6 +7,7 @@ import (
 	"fmt"
 	internal "github.com/clusterpedia-io/api/clusterpedia"
 	"github.com/clusterpedia-io/clusterpedia/pkg/storage"
+	"github.com/clusterpedia-io/clusterpedia/pkg/storage/internalstorage"
 	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/elastic/go-elasticsearch/v8/esapi"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -27,6 +28,15 @@ var (
 	supportedOrderByFields = sets.NewString("cluster", "namespace", "name", "created_at", "resource_version")
 )
 
+// TODO 如何支持多种查询关键字
+type CriteriaType int
+
+const (
+	Term = iota
+	Fuzzy
+	Match
+)
+
 type ResourceStorage struct {
 	client *elasticsearch.Client
 	codec  runtime.Codec
@@ -35,12 +45,14 @@ type ResourceStorage struct {
 	storageVersion       schema.GroupVersion
 	memoryVersion        schema.GroupVersion
 
-	indexName string
+	indexName     string
+	resourceAlias string
 }
 
 type QueryItem struct {
-	key      string
-	criteria interface{}
+	criteriaType CriteriaType
+	key          string
+	criteria     interface{}
 }
 
 func (s *ResourceStorage) GetStorageConfig() *storage.ResourceStorageConfig {
@@ -57,8 +69,12 @@ func (s *ResourceStorage) Create(ctx context.Context, cluster string, obj runtim
 }
 
 func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, opts *internal.ListOptions) error {
-	// TODO
-	query := s.genListQuery(opts)
+	// TODO 查询ownerid的功能放这里是否合适？？如果查询不到ownerIds又该如何处理？？
+	ownerIds, err := s.GetOwnerIds(ctx, opts)
+	if err != nil {
+		return err
+	}
+	query := s.genListQuery(ownerIds, opts)
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(query); err != nil {
 		return fmt.Errorf("error encoding query: %s", err)
@@ -142,7 +158,7 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 	return nil
 }
 
-func (s *ResourceStorage) genListQuery(opts *internal.ListOptions) map[string]interface{} {
+func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOptions) map[string]interface{} {
 	var quayIts []*QueryItem
 	// 这篇文档搞定in https://www.elastic.co/guide/cn/elasticsearch/guide/current/_finding_multiple_exact_values.html
 	// cluster的精确与in
@@ -198,22 +214,60 @@ func (s *ResourceStorage) genListQuery(opts *internal.ListOptions) map[string]in
 	// 创建时间比较 created_at >= < ？？有点向同步时间？？
 	// 原生sql的查询
 	// LabelSelector的查询
-	// opts.ExtraLabelSelector 我不知道是啥
+	// opts.ExtraLabelSelector
+	if opts.ExtraLabelSelector != nil {
+		if requirements, selectable := opts.ExtraLabelSelector.Requirements(); selectable {
+			for _, require := range requirements {
+				switch require.Key() {
+				case internalstorage.SearchLabelFuzzyName:
+					for _, name := range require.Values().List() {
+						name = strings.TrimSpace(name)
+						item := &QueryItem{
+							criteriaType: Fuzzy,
+							key:          "name",
+							criteria:     name,
+						}
+						quayIts = append(quayIts, item)
+					}
+				}
+			}
+		}
+	}
 	// fieldSelector的查询
-	// ownerfeference相关的查询，这个目前还做不到！！
-
+	// ownerfeference相关的查询
+	if len(opts.ClusterNames) == 1 && (len(opts.OwnerUID) != 0 || len(opts.OwnerName) != 0) {
+		item := &QueryItem{
+			key:      "object.metadata.ownerReferences.uid",
+			criteria: ownerIds,
+		}
+		quayIts = append(quayIts, item)
+	}
 	item := &QueryItem{
 		key:      "version",
 		criteria: s.storageVersion.Version,
 	}
 	quayIts = append(quayIts, item)
+	item = &QueryItem{
+		key:      "group",
+		criteria: s.storageVersion.Group,
+	}
+	quayIts = append(quayIts, item)
+	item = &QueryItem{
+		key:      "resource",
+		criteria: s.storageGroupResource.Resource,
+	}
+	quayIts = append(quayIts, item)
 	var critters []map[string]interface{}
 	for i := range quayIts {
 		var word string
-		if _, ok := quayIts[i].criteria.([]string); ok {
-			word = "terms"
+		if quayIts[i].criteriaType == Fuzzy {
+			word = "fuzzy"
 		} else {
-			word = "term"
+			if _, ok := quayIts[i].criteria.([]string); ok {
+				word = "terms"
+			} else {
+				word = "term"
+			}
 		}
 		criteria := map[string]interface{}{
 			word: map[string]interface{}{
@@ -246,6 +300,83 @@ func (s *ResourceStorage) genListQuery(opts *internal.ListOptions) map[string]in
 		},
 	}
 	return query
+}
+
+func (s *ResourceStorage) GetOwnerIds(ctx context.Context, opts *internal.ListOptions) ([]string, error) {
+	var empty []string
+	switch {
+	case len(opts.ClusterNames) != 1:
+		return empty, nil
+	case opts.OwnerUID != "":
+		result, err := s.getUIDs(ctx, opts.ClusterNames[0], []string{opts.OwnerUID}, opts.OwnerSeniority)
+		return result, err
+	case opts.OwnerName != "":
+		var ownerNamespaces []string
+		if len(opts.Namespaces) != 0 {
+			// match namespaced and clustered owner resources
+			ownerNamespaces = append(opts.Namespaces, "")
+		}
+		fmt.Println(ownerNamespaces)
+		//ownerQuery = buildOwnerQueryByName(db, opts.ClusterNames[0], ownerNamespaces, opts.OwnerGroupResource, opts.OwnerName, opts.OwnerSeniority)
+		return empty, nil
+
+	default:
+		return empty, nil
+	}
+}
+func (s *ResourceStorage) getUIDs(ctx context.Context, cluster string, uids []string, seniority int) ([]string, error) {
+	if seniority == 0 {
+		return uids, nil
+	}
+	var buf bytes.Buffer
+	query := map[string]interface{}{
+		"size":    500,
+		"_source": []string{"object.metadata.uid"},
+		"query": map[string]interface{}{
+			"bool": map[string]interface{}{
+				"must": []map[string]interface{}{
+					{
+						"terms": map[string]interface{}{
+							"object.metadata.ownerReferences.uid": uids,
+						},
+					},
+					{
+						"term": map[string]interface{}{
+							"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		return nil, fmt.Errorf("error encoding query: %s", err)
+	}
+	res, err := s.client.Search(
+		s.client.Search.WithContext(ctx),
+		s.client.Search.WithIndex(s.resourceAlias),
+		s.client.Search.WithBody(&buf),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if res.IsError() {
+		return nil, fmt.Errorf(res.String())
+	}
+	defer res.Body.Close()
+	var r SearchResponse
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+		return nil, err
+	}
+	uids = []string{}
+	for _, resource := range r.GetResources() {
+		// TODO 简单处理数据获取，
+		object := resource.GetObject()
+		uidmap := object["metadata"].(map[string]interface{})
+		uid := uidmap["uid"].(string)
+		uids = append(uids, uid)
+	}
+	return s.getUIDs(ctx, cluster, uids, seniority-1)
 }
 
 func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name string, into runtime.Object) error {
