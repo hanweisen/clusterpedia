@@ -10,13 +10,16 @@ import (
 	"github.com/clusterpedia-io/clusterpedia/pkg/storage/internalstorage"
 	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/elastic/go-elasticsearch/v8/esapi"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	genericstorage "k8s.io/apiserver/pkg/storage"
 	"k8s.io/klog/v2"
 	"reflect"
@@ -41,6 +44,7 @@ type Operator int
 
 const (
 	Equal = iota
+	notEqual
 )
 
 type ResourceStorage struct {
@@ -81,7 +85,10 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 	if err != nil {
 		return err
 	}
-	query := s.genListQuery(ownerIds, opts)
+	query, err := s.genListQuery(ownerIds, opts)
+	if err != nil {
+		return err
+	}
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(query); err != nil {
 		return fmt.Errorf("error encoding query: %s", err)
@@ -178,7 +185,7 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 	return nil
 }
 
-func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOptions) map[string]interface{} {
+func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOptions) (map[string]interface{}, error) {
 	var quayIts []*QueryItem
 	// 这篇文档搞定in https://www.elastic.co/guide/cn/elasticsearch/guide/current/_finding_multiple_exact_values.html
 	switch len(opts.ClusterNames) {
@@ -231,6 +238,61 @@ func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOpt
 		}
 	}
 	// fieldSelector的查询
+	if opts.EnhancedFieldSelector != nil {
+		if requirements, selectable := opts.EnhancedFieldSelector.Requirements(); selectable {
+			for _, requirement := range requirements {
+				var (
+					fields      []string
+					fieldErrors field.ErrorList
+				)
+				for _, f := range requirement.Fields() {
+					if f.IsList() {
+						fieldErrors = append(fieldErrors, field.Invalid(f.Path(), f.Name(), fmt.Sprintf("Storage<%s>: Not Support list field", StorageName)))
+						continue
+					}
+					fields = append(fields, f.Name())
+				}
+				if len(fieldErrors) != 0 {
+					return nil, apierrors.NewInvalid(schema.GroupKind{Group: internal.GroupName, Kind: "ListOptions"}, "fieldSelector", fieldErrors)
+				}
+				fields = append(fields, "")
+				copy(fields[1:], fields[0:])
+				fields[0] = "object"
+				path := strings.Join(fields, ".")
+				values := requirement.Values().List()
+				var item *QueryItem
+				switch requirement.Operator() {
+				case selection.Exists:
+				case selection.DoesNotExist:
+				case selection.Equals, selection.DoubleEquals:
+					item = &QueryItem{
+						key:      path,
+						criteria: values[0],
+					}
+				case selection.NotEquals:
+					item = &QueryItem{
+						operator: notEqual,
+						key:      path,
+						criteria: values[0],
+					}
+				case selection.In:
+					item = &QueryItem{
+						key:      path,
+						criteria: values,
+					}
+				case selection.NotIn:
+					item = &QueryItem{
+						operator: notEqual,
+						key:      path,
+						criteria: values,
+					}
+				default:
+					continue
+				}
+				quayIts = append(quayIts, item)
+			}
+		}
+	}
 	// ownerfeference相关的查询
 	if len(opts.ClusterNames) == 1 && (len(opts.OwnerUID) != 0 || len(opts.OwnerName) != 0) {
 		item := &QueryItem{
@@ -298,7 +360,7 @@ func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOpt
 			},
 		},
 	}
-	return query
+	return query, nil
 }
 
 func (s *ResourceStorage) GetOwnerIds(ctx context.Context, opts *internal.ListOptions) ([]string, error) {
