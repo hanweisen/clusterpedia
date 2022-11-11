@@ -215,9 +215,65 @@ func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOpt
 		}
 		quayIts = append(quayIts, item)
 	}
+
 	// 创建时间比较 created_at >= < ？？有点向同步时间？？
+	if opts.Since != nil && opts.Before != nil {
+		path := "object.metadata.creationTimestamp"
+		query := map[string]interface{}{
+			"query": map[string]interface{}{
+				"range": map[string]interface{}{
+					path: map[string]interface{}{
+						"gte": opts.Since.Time.UTC().Unix(),
+						"lte": opts.Before.Time.UTC().Unix(),
+					},
+				},
+			},
+		}
+		return query, nil
+	}
+
 	// 原生sql的查询
+
 	// LabelSelector的查询
+	if opts.LabelSelector != nil {
+		if requirements, selectable := opts.LabelSelector.Requirements(); selectable {
+			for _, requirement := range requirements {
+				path := "object.metadata.labels"
+				values := requirement.Values().List()
+				var item *QueryItem
+				switch requirement.Operator() {
+				case selection.Exists:
+				case selection.DoesNotExist:
+				case selection.Equals, selection.DoubleEquals:
+					item = &QueryItem{
+						key:      path,
+						criteria: values[0],
+					}
+				case selection.NotEquals:
+					item = &QueryItem{
+						operator: notEqual,
+						key:      path,
+						criteria: values[0],
+					}
+				case selection.In:
+					item = &QueryItem{
+						key:      path,
+						criteria: values,
+					}
+				case selection.NotIn:
+					item = &QueryItem{
+						operator: notEqual,
+						key:      path,
+						criteria: values,
+					}
+				default:
+					continue
+				}
+				quayIts = append(quayIts, item)
+			}
+		}
+	}
+
 	// opts.ExtraLabelSelector
 	if opts.ExtraLabelSelector != nil {
 		if requirements, selectable := opts.ExtraLabelSelector.Requirements(); selectable {
@@ -237,6 +293,7 @@ func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOpt
 			}
 		}
 	}
+
 	// fieldSelector的查询
 	if opts.EnhancedFieldSelector != nil {
 		if requirements, selectable := opts.EnhancedFieldSelector.Requirements(); selectable {
@@ -293,6 +350,7 @@ func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOpt
 			}
 		}
 	}
+
 	// ownerfeference相关的查询
 	if len(opts.ClusterNames) == 1 && (len(opts.OwnerUID) != 0 || len(opts.OwnerName) != 0) {
 		item := &QueryItem{
@@ -315,6 +373,7 @@ func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOpt
 		key:      "resource",
 		criteria: s.storageGroupResource.Resource,
 	}
+
 	quayIts = append(quayIts, item)
 	var mustFilter []map[string]interface{}
 	var notFilter []map[string]interface{}
@@ -334,8 +393,13 @@ func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOpt
 				quayIts[i].key: quayIts[i].criteria,
 			},
 		}
-		mustFilter = append(mustFilter, criteria)
+		if quayIts[i].operator == Equal {
+			mustFilter = append(mustFilter, criteria)
+		} else {
+			notFilter = append(notFilter, criteria)
+		}
 	}
+
 	// 设置排序，limit与offset
 	size := 500
 	if opts.Limit != -1 {
