@@ -7,19 +7,15 @@ import (
 	"fmt"
 	internal "github.com/clusterpedia-io/api/clusterpedia"
 	"github.com/clusterpedia-io/clusterpedia/pkg/storage"
-	"github.com/clusterpedia-io/clusterpedia/pkg/storage/internalstorage"
 	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/elastic/go-elasticsearch/v8/esapi"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 	genericstorage "k8s.io/apiserver/pkg/storage"
 	"k8s.io/klog/v2"
 	"reflect"
@@ -34,18 +30,7 @@ var (
 // TODO 如何支持多种查询关键字
 type CriteriaType int
 
-const (
-	Term = iota
-	Fuzzy
-	Match
-)
-
 type Operator int
-
-const (
-	Equal = iota
-	notEqual
-)
 
 type ResourceStorage struct {
 	client *elasticsearch.Client
@@ -183,248 +168,6 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 	}
 	v.Set(slice)
 	return nil
-}
-
-func (s *ResourceStorage) genListQuery(ownerIds []string, opts *internal.ListOptions) (map[string]interface{}, error) {
-	var quayIts []*QueryItem
-	// 这篇文档搞定in https://www.elastic.co/guide/cn/elasticsearch/guide/current/_finding_multiple_exact_values.html
-	switch len(opts.ClusterNames) {
-	case 0:
-	default:
-		item := &QueryItem{
-			key:      "object.metadata.annotations.shadow.clusterpedia.io/cluster-name",
-			criteria: opts.ClusterNames,
-		}
-		quayIts = append(quayIts, item)
-	}
-	switch len(opts.Namespaces) {
-	case 0:
-	default:
-		item := &QueryItem{
-			key:      "namespace",
-			criteria: opts.Namespaces,
-		}
-		quayIts = append(quayIts, item)
-	}
-	switch len(opts.Names) {
-	case 0:
-	default:
-		item := &QueryItem{
-			key:      "name",
-			criteria: opts.Names,
-		}
-		quayIts = append(quayIts, item)
-	}
-
-	// 创建时间比较 created_at >= < ？？有点向同步时间？？
-	if opts.Since != nil && opts.Before != nil {
-		path := "object.metadata.creationTimestamp"
-		query := map[string]interface{}{
-			"query": map[string]interface{}{
-				"range": map[string]interface{}{
-					path: map[string]interface{}{
-						"gte": opts.Since.Time.UTC().Unix(),
-						"lte": opts.Before.Time.UTC().Unix(),
-					},
-				},
-			},
-		}
-		return query, nil
-	}
-
-	// 原生sql的查询
-
-	// LabelSelector的查询
-	if opts.LabelSelector != nil {
-		if requirements, selectable := opts.LabelSelector.Requirements(); selectable {
-			for _, requirement := range requirements {
-				path := "object.metadata.labels"
-				values := requirement.Values().List()
-				var item *QueryItem
-				switch requirement.Operator() {
-				case selection.Exists:
-				case selection.DoesNotExist:
-				case selection.Equals, selection.DoubleEquals:
-					item = &QueryItem{
-						key:      path,
-						criteria: values[0],
-					}
-				case selection.NotEquals:
-					item = &QueryItem{
-						operator: notEqual,
-						key:      path,
-						criteria: values[0],
-					}
-				case selection.In:
-					item = &QueryItem{
-						key:      path,
-						criteria: values,
-					}
-				case selection.NotIn:
-					item = &QueryItem{
-						operator: notEqual,
-						key:      path,
-						criteria: values,
-					}
-				default:
-					continue
-				}
-				quayIts = append(quayIts, item)
-			}
-		}
-	}
-
-	// opts.ExtraLabelSelector
-	if opts.ExtraLabelSelector != nil {
-		if requirements, selectable := opts.ExtraLabelSelector.Requirements(); selectable {
-			for _, require := range requirements {
-				switch require.Key() {
-				case internalstorage.SearchLabelFuzzyName:
-					for _, name := range require.Values().List() {
-						name = strings.TrimSpace(name)
-						item := &QueryItem{
-							criteriaType: Fuzzy,
-							key:          "name",
-							criteria:     name,
-						}
-						quayIts = append(quayIts, item)
-					}
-				}
-			}
-		}
-	}
-
-	// fieldSelector的查询
-	if opts.EnhancedFieldSelector != nil {
-		if requirements, selectable := opts.EnhancedFieldSelector.Requirements(); selectable {
-			for _, requirement := range requirements {
-				var (
-					fields      []string
-					fieldErrors field.ErrorList
-				)
-				for _, f := range requirement.Fields() {
-					if f.IsList() {
-						fieldErrors = append(fieldErrors, field.Invalid(f.Path(), f.Name(), fmt.Sprintf("Storage<%s>: Not Support list field", StorageName)))
-						continue
-					}
-					fields = append(fields, f.Name())
-				}
-				if len(fieldErrors) != 0 {
-					return nil, apierrors.NewInvalid(schema.GroupKind{Group: internal.GroupName, Kind: "ListOptions"}, "fieldSelector", fieldErrors)
-				}
-				fields = append(fields, "")
-				copy(fields[1:], fields[0:])
-				fields[0] = "object"
-				path := strings.Join(fields, ".")
-				values := requirement.Values().List()
-				var item *QueryItem
-				switch requirement.Operator() {
-				case selection.Exists:
-				case selection.DoesNotExist:
-				case selection.Equals, selection.DoubleEquals:
-					item = &QueryItem{
-						key:      path,
-						criteria: values[0],
-					}
-				case selection.NotEquals:
-					item = &QueryItem{
-						operator: notEqual,
-						key:      path,
-						criteria: values[0],
-					}
-				case selection.In:
-					item = &QueryItem{
-						key:      path,
-						criteria: values,
-					}
-				case selection.NotIn:
-					item = &QueryItem{
-						operator: notEqual,
-						key:      path,
-						criteria: values,
-					}
-				default:
-					continue
-				}
-				quayIts = append(quayIts, item)
-			}
-		}
-	}
-
-	// ownerfeference相关的查询
-	if len(opts.ClusterNames) == 1 && (len(opts.OwnerUID) != 0 || len(opts.OwnerName) != 0) {
-		item := &QueryItem{
-			key:      "object.metadata.ownerReferences.uid",
-			criteria: ownerIds,
-		}
-		quayIts = append(quayIts, item)
-	}
-	item := &QueryItem{
-		key:      "version",
-		criteria: s.storageVersion.Version,
-	}
-	quayIts = append(quayIts, item)
-	item = &QueryItem{
-		key:      "group",
-		criteria: s.storageVersion.Group,
-	}
-	quayIts = append(quayIts, item)
-	item = &QueryItem{
-		key:      "resource",
-		criteria: s.storageGroupResource.Resource,
-	}
-
-	quayIts = append(quayIts, item)
-	var mustFilter []map[string]interface{}
-	var notFilter []map[string]interface{}
-	for i := range quayIts {
-		var word string
-		if quayIts[i].criteriaType == Fuzzy {
-			word = "fuzzy"
-		} else {
-			if _, ok := quayIts[i].criteria.([]string); ok {
-				word = "terms"
-			} else {
-				word = "term"
-			}
-		}
-		criteria := map[string]interface{}{
-			word: map[string]interface{}{
-				quayIts[i].key: quayIts[i].criteria,
-			},
-		}
-		if quayIts[i].operator == Equal {
-			mustFilter = append(mustFilter, criteria)
-		} else {
-			notFilter = append(notFilter, criteria)
-		}
-	}
-
-	// 设置排序，limit与offset
-	size := 500
-	if opts.Limit != -1 {
-		size = int(opts.Limit)
-	}
-	offset, _ := strconv.Atoi(opts.Continue)
-
-	for _, orderby := range opts.OrderBy {
-		field := orderby.Field
-		if supportedOrderByFields.Has(field) {
-			//TODO add sort
-		}
-	}
-
-	query := map[string]interface{}{
-		"size": size,
-		"from": offset,
-		"query": map[string]interface{}{
-			"bool": map[string]interface{}{
-				"must":     mustFilter,
-				"must_not": notFilter,
-			},
-		},
-	}
-	return query, nil
 }
 
 func (s *ResourceStorage) GetOwnerIds(ctx context.Context, opts *internal.ListOptions) ([]string, error) {
