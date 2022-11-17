@@ -28,6 +28,7 @@ type Hit struct {
 	Source *Resource `json:"_source"`
 }
 
+// TODO es查询返回的total不一定是一个准确值，基于他做的分页查询，会导致结果不准确需要添加参数，参考：https://www.elastic.co/guide/en/elasticsearch/reference/current/search-your-data.html
 func (r *SearchResponse) GetTotal() int64 {
 	if r.Hits == nil || r.Hits.Total == nil {
 		return 0

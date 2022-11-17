@@ -524,7 +524,7 @@ func (s *ResourceStorage) getUIDsByName(ctx context.Context, opts *internal.List
 	}
 	var uids []string
 	for _, resource := range r.GetResources() {
-		// TODO 简单处理数据获取，
+		// TODO 简单处理数据获取，这里可以转化成一个unstructured 对象进行进一步的处理
 		object := resource.GetObject()
 		uidmap := object["metadata"].(map[string]interface{})
 		uid := uidmap["uid"].(string)
@@ -579,7 +579,8 @@ func (s *ResourceStorage) getUIDs(ctx context.Context, cluster string, uids []st
 	}
 	uids = []string{}
 	for _, resource := range r.GetResources() {
-		// TODO 简单处理数据获取，
+		// TODO 简单处理数据获取
+		// 我需要测试一下能否直接反序列化
 		object := resource.GetObject()
 		uidmap := object["metadata"].(map[string]interface{})
 		uid := uidmap["uid"].(string)

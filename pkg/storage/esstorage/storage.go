@@ -19,6 +19,7 @@ const indexPrefix = "clusterpedia"
 
 type StorageFactory struct {
 	client     *elasticsearch.Client
+	index      *Index
 	indexAlias string
 }
 
@@ -46,10 +47,12 @@ func (s *StorageFactory) NewCollectionResourceStorage(cr *internal.CollectionRes
 	return NewCollectionResourceStorage(s.client, s.indexAlias, cr), nil
 }
 
-//TODO 返回结果应该是有些问题的，不能返回全部数据，导致informer无法正确的更新数据，应该加上limit!
+// TODO 返回结果应该是有些问题的，不能返回全部数据，导致informer无法正确的更新数据，应该加上size，但是size最大是1w条，可以使用下面2种方法获取全量数据
+// https://zhuanlan.zhihu.com/p/335992351
+// https://www.cnblogs.com/hahaha111122222/p/12085212.html
+// https://doc.codingdict.com/elasticsearch/117/
 func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string) (map[schema.GroupVersionResource]map[string]interface{}, error) {
 	resourceVersions := make(map[schema.GroupVersionResource]map[string]interface{})
-	var buf bytes.Buffer
 	query := map[string]interface{}{
 		"_source": []string{"group", "version", "resource", "namespace", "name", "resourceVersion"},
 		"query": map[string]interface{}{
@@ -58,28 +61,9 @@ func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string
 			},
 		},
 	}
-	if err := json.NewEncoder(&buf).Encode(query); err != nil {
-		return nil, fmt.Errorf("error encoding query: %s", err)
-	}
-	res, err := s.client.Search(
-		s.client.Search.WithContext(ctx),
-		s.client.Search.WithIndex(s.indexAlias),
-		s.client.Search.WithBody(&buf),
-	)
+	r, err := s.index.Search(ctx, query, s.indexAlias)
 	if err != nil {
-		return nil, err
-	}
-	if res.IsError() {
-		if res.StatusCode == 404 {
-			return resourceVersions, nil
-		} else {
-			return nil, fmt.Errorf(res.String())
-		}
-	}
-	defer res.Body.Close()
-	var r SearchResponse
-	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
-		return nil, err
+		return resourceVersions, err
 	}
 	for _, item := range r.Hits.Hits {
 		resource := item.Source
@@ -126,7 +110,6 @@ func (s *StorageFactory) CleanCluster(ctx context.Context, cluster string) error
 }
 
 func (s *StorageFactory) CleanClusterResource(ctx context.Context, cluster string, gvr schema.GroupVersionResource) error {
-	var buf bytes.Buffer
 	query := map[string]interface{}{
 		"query": map[string]interface{}{
 			"bool": map[string]interface{}{
@@ -155,21 +138,11 @@ func (s *StorageFactory) CleanClusterResource(ctx context.Context, cluster strin
 			},
 		},
 	}
-	if err := json.NewEncoder(&buf).Encode(query); err != nil {
-		return fmt.Errorf("error encoding query: %s", err)
-	}
-	req := esapi.DeleteByQueryRequest{
-		Index: []string{s.indexAlias},
-		Body:  &buf,
-	}
-	res, err := req.Do(ctx, s.client)
+	err := s.index.DeleteByQuery(ctx, query, s.indexAlias)
 	if err != nil {
 		return err
 	}
-	if res.IsError() {
-		return fmt.Errorf("clean cluster %s resource %s/%s failure, response: %s", cluster, gvr.GroupVersion(), gvr.Resource, res.String())
-	}
-	klog.V(4).Info("clean cluster %s resource %s/%s success, response: %s", cluster, gvr.GroupVersion(), gvr.Resource, res.String())
+	klog.V(4).Info("clean cluster %s resource %s/%s success", cluster, gvr.GroupVersion(), gvr.Resource)
 	return nil
 }
 
@@ -179,20 +152,4 @@ func (s *StorageFactory) GetCollectionResources(ctx context.Context) ([]*interna
 		crs = append(crs, cr.DeepCopy())
 	}
 	return crs, nil
-}
-
-func (s *StorageFactory) isIndexExist(ctx context.Context) (bool, error) {
-	res, err := s.client.Indices.Exists([]string{s.indexAlias},
-		s.client.Indices.Exists.WithContext(ctx))
-	if err != nil {
-		return false, err
-	}
-	if res.IsError() {
-		if res.StatusCode == 404 {
-			return false, nil
-		} else {
-			return false, fmt.Errorf(res.String())
-		}
-	}
-	return true, nil
 }
