@@ -46,14 +46,14 @@ func (r *SearchResponse) GetResources() []*Resource {
 }
 
 type Resource struct {
-	Group           string `json:"group"`
-	Version         string `json:"version"`
-	Kind            string `json:"kind"`
-	Resource        string `json:"resource"`
-	ResourceVersion string `json:"resource_version"`
-	Name            string `json:"name"`
-	Namespace       string `json:"namespace"`
-	Object          map[string]interface{}
+	Group           string                 `json:"group"`
+	Version         string                 `json:"version"`
+	Kind            string                 `json:"kind"`
+	Resource        string                 `json:"resource"`
+	ResourceVersion string                 `json:"resource_version"`
+	Name            string                 `json:"name"`
+	Namespace       string                 `json:"namespace"`
+	Object          map[string]interface{} `json:"object"`
 }
 
 func (r Resource) GroupVersionResource() schema.GroupVersionResource {

@@ -700,6 +700,14 @@ func TestDeleteCluster(t *testing.T) {
 	}
 }
 
+func TestDeleteById(t *testing.T) {
+	index := esstorage.NewIndex(getESClient())
+	err := index.DeleteById(context.Background(), "ea27ad0a-c227-4628-b563-1f1b9c58ee8a", "clusterpedia--secrets")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDeleteClusterGVK(t *testing.T) {
 	gvr := schema.GroupVersionResource{
 		Group:    "apps",

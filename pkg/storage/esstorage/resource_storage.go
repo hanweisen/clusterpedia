@@ -1,14 +1,13 @@
 package esstorage
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	internal "github.com/clusterpedia-io/api/clusterpedia"
-	"github.com/clusterpedia-io/clusterpedia/pkg/storage"
+	"reflect"
+	"strconv"
+
 	"github.com/elastic/go-elasticsearch/v8"
-	"github.com/elastic/go-elasticsearch/v8/esapi"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -17,10 +16,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/sets"
 	genericstorage "k8s.io/apiserver/pkg/storage"
-	"k8s.io/klog/v2"
-	"reflect"
-	"strconv"
-	"strings"
+
+	internal "github.com/clusterpedia-io/api/clusterpedia"
+	"github.com/clusterpedia-io/clusterpedia/pkg/storage"
 )
 
 var (
@@ -42,6 +40,8 @@ type ResourceStorage struct {
 
 	indexName     string
 	resourceAlias string
+
+	index *Index
 }
 
 type QueryItem struct {
@@ -74,24 +74,8 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 	if err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(query); err != nil {
-		return fmt.Errorf("error encoding query: %s", err)
-	}
-	res, err := s.client.Search(
-		s.client.Search.WithContext(ctx),
-		s.client.Search.WithIndex(s.indexName),
-		s.client.Search.WithBody(&buf),
-	)
+	r, err := s.index.Search(ctx, query, s.indexName)
 	if err != nil {
-		return err
-	}
-	if res.IsError() {
-		return fmt.Errorf(res.String())
-	}
-	defer res.Body.Close()
-	var r SearchResponse
-	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return err
 	}
 	list, err := meta.ListAccessor(listObject)
@@ -244,25 +228,8 @@ func (s *ResourceStorage) getUIDsByName(ctx context.Context, opts *internal.List
 			},
 		},
 	}
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(query); err != nil {
-		return nil, fmt.Errorf("error encoding query: %s", err)
-	}
-	res, err := s.client.Search(
-		s.client.Search.WithContext(ctx),
-		s.client.Search.WithIndex(s.resourceAlias),
-		s.client.Search.WithBody(&buf),
-	)
+	r, err := s.index.Search(ctx, query, s.resourceAlias)
 	if err != nil {
-		return nil, err
-	}
-	if res.IsError() {
-		return nil, fmt.Errorf(res.String())
-	}
-	defer res.Body.Close()
-	var r SearchResponse
-	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return nil, err
 	}
 	var uids []string
@@ -280,7 +247,6 @@ func (s *ResourceStorage) getUIDs(ctx context.Context, cluster string, uids []st
 	if seniority == 0 {
 		return uids, nil
 	}
-	var buf bytes.Buffer
 	query := map[string]interface{}{
 		"size":    500,
 		"_source": []string{"object.metadata.uid"},
@@ -301,23 +267,9 @@ func (s *ResourceStorage) getUIDs(ctx context.Context, cluster string, uids []st
 			},
 		},
 	}
-	if err := json.NewEncoder(&buf).Encode(query); err != nil {
-		return nil, fmt.Errorf("error encoding query: %s", err)
-	}
-	res, err := s.client.Search(
-		s.client.Search.WithContext(ctx),
-		s.client.Search.WithIndex(s.resourceAlias),
-		s.client.Search.WithBody(&buf),
-	)
+
+	r, err := s.index.Search(ctx, query, s.resourceAlias)
 	if err != nil {
-		return nil, err
-	}
-	if res.IsError() {
-		return nil, fmt.Errorf(res.String())
-	}
-	defer res.Body.Close()
-	var r SearchResponse
-	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return nil, err
 	}
 	uids = []string{}
@@ -333,7 +285,6 @@ func (s *ResourceStorage) getUIDs(ctx context.Context, cluster string, uids []st
 }
 
 func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name string, into runtime.Object) error {
-	var buf bytes.Buffer
 	query := map[string]interface{}{
 		"query": map[string]interface{}{
 			"bool": map[string]interface{}{
@@ -372,23 +323,8 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 			},
 		},
 	}
-	if err := json.NewEncoder(&buf).Encode(query); err != nil {
-		return fmt.Errorf("error encoding query: %s", err)
-	}
-	res, err := s.client.Search(
-		s.client.Search.WithContext(ctx),
-		s.client.Search.WithIndex(s.indexName),
-		s.client.Search.WithBody(&buf),
-	)
+	r, err := s.index.Search(ctx, query, s.indexName)
 	if err != nil {
-		return err
-	}
-	if res.IsError() {
-		return fmt.Errorf(res.String())
-	}
-	defer res.Body.Close()
-	var r SearchResponse
-	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return err
 	}
 	cnt := len(r.GetResources())
@@ -397,7 +333,8 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 		return fmt.Errorf("find more than one item")
 	}
 	if cnt == 0 {
-		return fmt.Errorf("can not fi")
+		//TODO add not found error
+		return fmt.Errorf("%s.%s \"%s\" not found", s.storageGroupResource.Resource, s.storageGroupResource.Group, name)
 	}
 	for _, resource := range r.GetResources() {
 		object := resource.Object
@@ -423,18 +360,14 @@ func (s *ResourceStorage) Delete(ctx context.Context, cluster string, obj runtim
 	if err != nil {
 		return err
 	}
-	req := esapi.DeleteRequest{
-		Index:      s.indexName,
-		DocumentID: string(metaobj.GetUID()),
+	if len(metaobj.GetUID()) == 0 {
+		//TODO 会有一些脏数据存入es 导致后面删除报错
+		return nil
 	}
-	res, err := req.Do(ctx, s.client)
+	err = s.index.DeleteById(ctx, string(metaobj.GetUID()), s.indexName)
 	if err != nil {
 		return err
 	}
-	if res.IsError() {
-		return fmt.Errorf("delete failure, response: %v", res.String())
-	}
-	klog.V(4).Info("delete success, response: %v", res.String())
 	return nil
 }
 
@@ -452,27 +385,10 @@ func (s *ResourceStorage) upsert(ctx context.Context, cluster string, obj runtim
 		return err
 	}
 	resource := s.genDocument(metaobj, gvk)
-	body, err := json.Marshal(resource)
-	if err != nil {
-		return fmt.Errorf("marshal json error %v", err)
-	}
-
-	req := esapi.IndexRequest{
-		DocumentID: string(metaobj.GetUID()),
-		Body:       strings.NewReader(string(body)),
-		Index:      s.indexName,
-	}
-	res, err := req.Do(ctx, s.client)
+	err = s.index.Upsert(ctx, s.indexName, string(metaobj.GetUID()), resource)
 	if err != nil {
 		return err
 	}
-
-	if res.IsError() {
-		msg := fmt.Sprintf("upsert %s/%s %s/%s failure, response: %v", s.storageGroupResource.Group, s.storageGroupResource.Resource, metaobj.GetNamespace(), metaobj.GetName(), res.String())
-		klog.Error(msg)
-		return fmt.Errorf(msg)
-	}
-	klog.V(4).Info("upsert success, response: %v", res.String())
 	return nil
 }
 

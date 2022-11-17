@@ -50,10 +50,11 @@ var mappingTemplate = `{
                 "type": "flattened"
               },
               "creationTimestamp": {
-                "type": "text"
+                "type": "date",
+                "format": "yyyy-MM-dd'T'HH:mm:ss'Z'"
               },
               "deletionTimestamp": {
-                "type": "text"
+                "type": "keyword"
               },
               "labels": {
                 "type": "flattened"

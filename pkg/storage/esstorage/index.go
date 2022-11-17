@@ -16,6 +16,12 @@ type Index struct {
 	client *elasticsearch.Client
 }
 
+func NewIndex(client *elasticsearch.Client) *Index {
+	return &Index{
+		client: client,
+	}
+}
+
 func (s *Index) Search(ctx context.Context, query map[string]interface{}, indexName ...string) (*SearchResponse, error) {
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(query); err != nil {
@@ -29,12 +35,12 @@ func (s *Index) Search(ctx context.Context, query map[string]interface{}, indexN
 	if err != nil {
 		return nil, err
 	}
+	// TODO not found处理
 	if res.IsError() {
 		return nil, fmt.Errorf(res.String())
 	}
 	defer res.Body.Close()
 	var r SearchResponse
-	// TODO 这里是传&r还是r还是*r 这里需要测试一下
 	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return nil, err
 	}
@@ -70,13 +76,14 @@ func (s *Index) DeleteById(ctx context.Context, docId string, indexName string) 
 		return err
 	}
 	if res.IsError() {
+		// TODO 处理notfound error  delete failure, response: [404 Not Found]
 		return fmt.Errorf("delete failure, response: %v", res.String())
 	}
 	klog.V(4).Info("delete success, response: %v", res.String())
 	return nil
 }
 
-func (s *Index) Upsert(ctx context.Context, indexName string, uid string, doc *Resource) error {
+func (s *Index) Upsert(ctx context.Context, indexName string, uid string, doc map[string]interface{}) error {
 	body, err := json.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("marshal json error %v", err)

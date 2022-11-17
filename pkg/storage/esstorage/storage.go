@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/elastic/go-elasticsearch/v8/esapi"
@@ -32,6 +33,7 @@ func (s *StorageFactory) NewResourceStorage(config *storage.ResourceStorageConfi
 		storageVersion:       config.StorageVersion,
 		memoryVersion:        config.MemoryVersion,
 		resourceAlias:        s.indexAlias,
+		index:                s.index,
 	}
 	// indexAlias: ${prefix}-${group}-${resource}
 	storage.indexName = fmt.Sprintf("%s-%s-%s", indexPrefix, config.StorageGroupResource.Group, config.StorageGroupResource.Resource)
@@ -54,15 +56,20 @@ func (s *StorageFactory) NewCollectionResourceStorage(cr *internal.CollectionRes
 func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string) (map[schema.GroupVersionResource]map[string]interface{}, error) {
 	resourceVersions := make(map[schema.GroupVersionResource]map[string]interface{})
 	query := map[string]interface{}{
+		"size":    10000,
 		"_source": []string{"group", "version", "resource", "namespace", "name", "resourceVersion"},
 		"query": map[string]interface{}{
-			"match": map[string]interface{}{
-				"Object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+			"term": map[string]interface{}{
+				"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
 			},
 		},
 	}
 	r, err := s.index.Search(ctx, query, s.indexAlias)
+
 	if err != nil {
+		if strings.Contains(err.Error(), "404") {
+			return resourceVersions, nil
+		}
 		return resourceVersions, err
 	}
 	for _, item := range r.Hits.Hits {
