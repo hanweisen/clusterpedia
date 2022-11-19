@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/pointer"
 	"log"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -832,6 +833,18 @@ func TestSearchResponse(t *testing.T) {
 	}
 	println(r.Hits.Total.Value)
 	println(r.Hits.Hits[0].Source.Name)
+}
+func TestListStr(t *testing.T) {
+	testString := "green open clusterpedia--pods            rxCyBtITS3y4jRgkkkq6Iw 1 0  89 11   550kb   550kb"
+	reg := regexp.MustCompile("[^\\s]+")
+	str := reg.FindAllString(testString, -1)
+	println(str[2])
+
+}
+func TestListIndex(t *testing.T) {
+	index := esstorage.NewIndex(getESClient())
+	strs, _ := index.ListIndex()
+	println(strings.Join(strs, ","))
 }
 
 func TestSearchResponseString(t *testing.T) {

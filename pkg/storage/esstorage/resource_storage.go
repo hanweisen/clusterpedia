@@ -74,7 +74,7 @@ func (s *ResourceStorage) List(ctx context.Context, listObject runtime.Object, o
 	if err != nil {
 		return err
 	}
-	r, err := s.index.Search(ctx, query, s.indexName)
+	r, err := s.index.Search(ctx, query, []string{s.indexName})
 	if err != nil {
 		return err
 	}
@@ -228,13 +228,13 @@ func (s *ResourceStorage) getUIDsByName(ctx context.Context, opts *internal.List
 			},
 		},
 	}
-	r, err := s.index.Search(ctx, query, s.resourceAlias)
+	r, err := s.index.Search(ctx, query, []string{s.resourceAlias})
 	if err != nil {
 		return nil, err
 	}
 	var uids []string
 	for _, resource := range r.GetResources() {
-		// TODO 简单处理数据获取，这里可以转化成一个unstructured 对象进行进一步的处理
+		// TODO 提供一个提取函数
 		object := resource.GetObject()
 		uidmap := object["metadata"].(map[string]interface{})
 		uid := uidmap["uid"].(string)
@@ -268,7 +268,7 @@ func (s *ResourceStorage) getUIDs(ctx context.Context, cluster string, uids []st
 		},
 	}
 
-	r, err := s.index.Search(ctx, query, s.resourceAlias)
+	r, err := s.index.Search(ctx, query, []string{s.resourceAlias})
 	if err != nil {
 		return nil, err
 	}
@@ -323,34 +323,26 @@ func (s *ResourceStorage) Get(ctx context.Context, cluster, namespace, name stri
 			},
 		},
 	}
-	r, err := s.index.Search(ctx, query, s.indexName)
+	r, err := s.index.Search(ctx, query, []string{s.indexName})
 	if err != nil {
 		return err
 	}
 	cnt := len(r.GetResources())
-	if cnt > 1 {
-		//TODO return error
-		return fmt.Errorf("find more than one item")
-	}
 	if cnt == 0 {
-		//TODO add not found error
-		return fmt.Errorf("%s.%s \"%s\" not found", s.storageGroupResource.Resource, s.storageGroupResource.Group, name)
+		return genericstorage.NewKeyNotFoundError(fmt.Sprintf("%s/%s", cluster, namespace+"/"+name), 0)
 	}
-	for _, resource := range r.GetResources() {
-		object := resource.Object
-
-		byte, err := json.Marshal(object)
-		if err != nil {
-			return err
-		}
-		obj, _, err := s.codec.Decode(byte, nil, into)
-
-		if err != nil {
-			return err
-		}
-		if obj != into {
-			return fmt.Errorf("failed to decode resource, into is %v", into)
-		}
+	resource := r.GetResources()[0]
+	object := resource.Object
+	byte, err := json.Marshal(object)
+	if err != nil {
+		return err
+	}
+	obj, _, err := s.codec.Decode(byte, nil, into)
+	if err != nil {
+		return err
+	}
+	if obj != into {
+		return fmt.Errorf("failed to decode resource, into is %v", into)
 	}
 	return nil
 }

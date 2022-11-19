@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/elastic/go-elasticsearch/v8"
-	"github.com/elastic/go-elasticsearch/v8/esapi"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/klog/v2"
 
@@ -36,7 +35,7 @@ func (s *StorageFactory) NewResourceStorage(config *storage.ResourceStorageConfi
 		index:                s.index,
 	}
 	// indexAlias: ${prefix}-${group}-${resource}
-	storage.indexName = fmt.Sprintf("%s-%s-%s", indexPrefix, config.StorageGroupResource.Group, config.StorageGroupResource.Resource)
+	storage.indexName = generateIndexName(config.StorageGroupResource.Group, config.StorageGroupResource.Resource)
 	var mapping = GetIndexMapping(s.indexAlias, config.GroupResource)
 	err := EnsureIndex(s.client, mapping, storage.indexName)
 	if err != nil {
@@ -45,18 +44,17 @@ func (s *StorageFactory) NewResourceStorage(config *storage.ResourceStorageConfi
 	return storage, nil
 }
 
+func generateIndexName(group, resource string) string {
+	return fmt.Sprintf("%s-%s-%s", indexPrefix, group, resource)
+}
+
 func (s *StorageFactory) NewCollectionResourceStorage(cr *internal.CollectionResource) (storage.CollectionResourceStorage, error) {
 	return NewCollectionResourceStorage(s.client, s.indexAlias, cr), nil
 }
 
-// TODO 返回结果应该是有些问题的，不能返回全部数据，导致informer无法正确的更新数据，应该加上size，但是size最大是1w条，可以使用下面2种方法获取全量数据
-// https://zhuanlan.zhihu.com/p/335992351
-// https://www.cnblogs.com/hahaha111122222/p/12085212.html
-// https://doc.codingdict.com/elasticsearch/117/
 func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string) (map[schema.GroupVersionResource]map[string]interface{}, error) {
 	resourceVersions := make(map[schema.GroupVersionResource]map[string]interface{})
 	query := map[string]interface{}{
-		"size":    10000,
 		"_source": []string{"group", "version", "resource", "namespace", "name", "resourceVersion"},
 		"query": map[string]interface{}{
 			"term": map[string]interface{}{
@@ -64,31 +62,35 @@ func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string
 			},
 		},
 	}
-	r, err := s.index.Search(ctx, query, s.indexAlias)
+	resps, err := s.index.SearchAll(ctx, query, []string{s.indexAlias})
 
 	if err != nil {
-		if strings.Contains(err.Error(), "404") {
+		esError, ok := err.(*ESError)
+		if ok && esError.StatusCode == 404 {
 			return resourceVersions, nil
 		}
 		return resourceVersions, err
 	}
-	for _, item := range r.Hits.Hits {
-		resource := item.Source
-		gvr := resource.GroupVersionResource()
-		versions := resourceVersions[gvr]
-		if versions == nil {
-			versions = make(map[string]interface{})
-			resourceVersions[gvr] = versions
+	for _, r := range resps {
+		for _, item := range r.Hits.Hits {
+			resource := item.Source
+			gvr := resource.GroupVersionResource()
+			versions := resourceVersions[gvr]
+			if versions == nil {
+				versions = make(map[string]interface{})
+				resourceVersions[gvr] = versions
+			}
+			key := resource.GetName()
+			if resource.GetNamespace() != "" {
+				key = resource.GetNamespace() + "/" + resource.GetName()
+			}
+			versions[key] = resource.GetResourceVersion()
 		}
-		key := resource.GetName()
-		if resource.GetNamespace() != "" {
-			key = resource.GetNamespace() + "/" + resource.GetName()
-		}
-		versions[key] = resource.GetResourceVersion()
 	}
 	return resourceVersions, nil
 }
 
+// TODO 这里还是有问题的, 需要查询数所有的索引，批量删除
 func (s *StorageFactory) CleanCluster(ctx context.Context, cluster string) error {
 	var buf bytes.Buffer
 	query := map[string]interface{}{
@@ -101,18 +103,21 @@ func (s *StorageFactory) CleanCluster(ctx context.Context, cluster string) error
 	if err := json.NewEncoder(&buf).Encode(query); err != nil {
 		return fmt.Errorf("error encoding query: %s", err)
 	}
-	req := esapi.DeleteByQueryRequest{
-		Index: []string{s.indexAlias},
-		Body:  &buf,
-	}
-	res, err := req.Do(ctx, s.client)
+
+	indexNames, err := s.index.ListIndex()
 	if err != nil {
 		return err
 	}
-	if res.IsError() {
-		return fmt.Errorf("clean cluster %v failure, response: %v", cluster, res.String())
+	var targetIndex []string
+	for _, indexName := range indexNames {
+		if strings.HasPrefix(indexName, indexPrefix) {
+			targetIndex = append(targetIndex, indexName)
+		}
 	}
-	klog.V(4).Info("clean cluster %v success, response: %v", cluster, res.String())
+	s.index.DeleteByQuery(ctx, query, targetIndex...)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -145,7 +150,8 @@ func (s *StorageFactory) CleanClusterResource(ctx context.Context, cluster strin
 			},
 		},
 	}
-	err := s.index.DeleteByQuery(ctx, query, s.indexAlias)
+	indexName := generateIndexName(gvr.Group, gvr.Resource)
+	err := s.index.DeleteByQuery(ctx, query, indexName)
 	if err != nil {
 		return err
 	}

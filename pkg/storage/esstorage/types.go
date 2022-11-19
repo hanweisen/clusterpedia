@@ -5,9 +5,10 @@ import (
 )
 
 type SearchResponse struct {
-	Took    int   `json:"took"`
-	TimeOut bool  `json:"time_out"`
-	Hits    *Hits `json:"hits"`
+	ScrollId string `json:"_scroll_id""`
+	Took     int    `json:"took"`
+	TimeOut  bool   `json:"time_out"`
+	Hits     *Hits  `json:"hits"`
 }
 
 type Hits struct {

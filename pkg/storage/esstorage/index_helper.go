@@ -49,12 +49,17 @@ var mappingTemplate = `{
               "annotations": {
                 "type": "flattened"
               },
+              "managedFields": {
+                "type": "object",
+                "enabled":false	
+              },
               "creationTimestamp": {
                 "type": "date",
                 "format": "yyyy-MM-dd'T'HH:mm:ss'Z'"
               },
               "deletionTimestamp": {
-                "type": "keyword"
+                "type": "date", 
+                "format": "yyyy-MM-dd'T'HH:mm:ss'Z'"
               },
               "labels": {
                 "type": "flattened"
