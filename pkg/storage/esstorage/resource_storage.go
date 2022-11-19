@@ -25,7 +25,6 @@ var (
 	supportedOrderByFields = sets.NewString("cluster", "namespace", "name", "created_at", "resource_version")
 )
 
-// TODO 如何支持多种查询关键字
 type CriteriaType int
 
 type Operator int
@@ -40,6 +39,8 @@ type ResourceStorage struct {
 
 	indexName     string
 	resourceAlias string
+
+	extractConfig []string
 
 	index *Index
 }
@@ -234,11 +235,11 @@ func (s *ResourceStorage) getUIDsByName(ctx context.Context, opts *internal.List
 	}
 	var uids []string
 	for _, resource := range r.GetResources() {
-		// TODO 提供一个提取函数
-		object := resource.GetObject()
-		uidmap := object["metadata"].(map[string]interface{})
-		uid := uidmap["uid"].(string)
-		uids = append(uids, uid)
+		uid := SimpleMapExtract("metadata.uid", resource.GetObject())
+		if uid == nil {
+			return nil, fmt.Errorf("error")
+		}
+		uids = append(uids, uid.(string))
 	}
 	return s.getUIDs(ctx, cluster, uids, opts.OwnerSeniority)
 }
@@ -274,11 +275,14 @@ func (s *ResourceStorage) getUIDs(ctx context.Context, cluster string, uids []st
 	}
 	uids = []string{}
 	for _, resource := range r.GetResources() {
-		// TODO 简单处理数据获取
-		// 我需要测试一下能否直接反序列化
-		object := resource.GetObject()
-		uidmap := object["metadata"].(map[string]interface{})
-		uid := uidmap["uid"].(string)
+		result := SimpleMapExtract("metadata.uid", resource.GetObject())
+		if result == nil {
+			return nil, fmt.Errorf("extract uid failure, targetObject is %v", resource.GetObject())
+		}
+		uid, ok := result.(string)
+		if !ok {
+			return nil, fmt.Errorf("result to string failure, targetObject is %v", resource.GetObject())
+		}
 		uids = append(uids, uid)
 	}
 	return s.getUIDs(ctx, cluster, uids, seniority-1)
@@ -376,7 +380,21 @@ func (s *ResourceStorage) upsert(ctx context.Context, cluster string, obj runtim
 	if err != nil {
 		return err
 	}
-	resource := s.genDocument(metaobj, gvk)
+
+	custom := make(map[string]string)
+	if unstructured, ok := obj.(*unstructured.Unstructured); ok && len(s.extractConfig) > 0 {
+		for _, path := range s.extractConfig {
+			result := SimpleMapExtract(path, unstructured.Object)
+			if result != nil {
+				value, err := json.Marshal(result)
+				if err == nil {
+					custom[path] = string(value)
+				}
+			}
+		}
+	}
+
+	resource := s.genDocument(metaobj, gvk, custom)
 	err = s.index.Upsert(ctx, s.indexName, string(metaobj.GetUID()), resource)
 	if err != nil {
 		return err
@@ -384,16 +402,19 @@ func (s *ResourceStorage) upsert(ctx context.Context, cluster string, obj runtim
 	return nil
 }
 
-func (s *ResourceStorage) genDocument(metaobj metav1.Object, gvk schema.GroupVersionKind) map[string]interface{} {
+func (s *ResourceStorage) genDocument(metaObj metav1.Object, gvk schema.GroupVersionKind, custom map[string]string) map[string]interface{} {
 	requestBody := map[string]interface{}{
 		"group":           s.storageGroupResource.Group,
 		"version":         s.storageVersion.Version,
 		"resource":        s.storageGroupResource.Resource,
 		"kind":            gvk.Kind,
-		"name":            metaobj.GetName(),
-		"namespace":       metaobj.GetNamespace(),
-		"resourceVersion": metaobj.GetResourceVersion(),
-		"object":          metaobj,
+		"name":            metaObj.GetName(),
+		"namespace":       metaObj.GetNamespace(),
+		"resourceVersion": metaObj.GetResourceVersion(),
+		"object":          metaObj,
+	}
+	if len(custom) > 0 {
+		requestBody["custom"] = custom
 	}
 	return requestBody
 }

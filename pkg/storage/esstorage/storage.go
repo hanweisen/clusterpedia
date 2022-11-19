@@ -9,7 +9,6 @@ import (
 
 	"github.com/elastic/go-elasticsearch/v8"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/klog/v2"
 
 	internal "github.com/clusterpedia-io/api/clusterpedia"
 	"github.com/clusterpedia-io/clusterpedia/pkg/storage"
@@ -40,6 +39,9 @@ func (s *StorageFactory) NewResourceStorage(config *storage.ResourceStorageConfi
 	err := EnsureIndex(s.client, mapping, storage.indexName)
 	if err != nil {
 		return nil, err
+	}
+	if storage.storageGroupResource.Resource == ResourceConfigmap {
+		storage.extractConfig = []string{"data"}
 	}
 	return storage, nil
 }
@@ -90,13 +92,12 @@ func (s *StorageFactory) GetResourceVersions(ctx context.Context, cluster string
 	return resourceVersions, nil
 }
 
-// TODO 这里还是有问题的, 需要查询数所有的索引，批量删除
 func (s *StorageFactory) CleanCluster(ctx context.Context, cluster string) error {
 	var buf bytes.Buffer
 	query := map[string]interface{}{
 		"query": map[string]interface{}{
 			"match": map[string]interface{}{
-				"Object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+				"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
 			},
 		},
 	}
@@ -143,7 +144,7 @@ func (s *StorageFactory) CleanClusterResource(ctx context.Context, cluster strin
 					},
 					{
 						"match": map[string]interface{}{
-							"Object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
+							"object.metadata.annotations.shadow.clusterpedia.io/cluster-name": cluster,
 						},
 					},
 				},
@@ -155,7 +156,6 @@ func (s *StorageFactory) CleanClusterResource(ctx context.Context, cluster strin
 	if err != nil {
 		return err
 	}
-	klog.V(4).Info("clean cluster %s resource %s/%s success", cluster, gvr.GroupVersion(), gvr.Resource)
 	return nil
 }
 

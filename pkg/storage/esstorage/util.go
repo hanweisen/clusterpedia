@@ -116,7 +116,20 @@ func EnsureIndex(client *elasticsearch.Client, mapping string, indexName string)
 		}
 		return fmt.Errorf(msg)
 	}
-	klog.Infof("index %s created", indexName)
 	return nil
+}
 
+func SimpleMapExtract(path string, object map[string]interface{}) interface{} {
+	fields := strings.Split(path, ".")
+	var cur interface{}
+	cur = object
+	for i := range fields {
+		field := fields[i]
+		mapObj, ok := cur.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		cur = mapObj[field]
+	}
+	return cur
 }

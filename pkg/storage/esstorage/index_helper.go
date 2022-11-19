@@ -9,6 +9,7 @@ import (
 const (
 	ResourceConfigmap = "configmaps"
 	ResourceSecret    = "secrets"
+	ResourceEvent     = "events"
 )
 
 var mappingTemplate = `{
@@ -23,6 +24,9 @@ var mappingTemplate = `{
     }
   },
   "mappings": {
+    "_source":{
+		"excludes":["custom"]
+    },
     "properties": {
       "group": {
         "type": "keyword"
@@ -129,6 +133,32 @@ var secret = `
         "enabled":false
     }
 `
+var event = `
+    "involvedObject": {
+        "type": "flattened",
+    },
+    "source": {
+        "type": "flattened",
+    },
+    "firstTimestamp": {
+        "type": "date", 
+		"format": "yyyy-MM-dd'T'HH:mm:ss'Z'"
+    },
+    "lastTimestamp": {
+        "type": "date", 
+		"format": "yyyy-MM-dd'T'HH:mm:ss'Z'"
+    },
+    "eventTime": {
+        "type": "date", 
+		"format": "yyyy-MM-dd'T'HH:mm:ss'Z'"
+    },
+    "related": {
+        "type": "flattened",
+    },
+    "series": {
+        "type": "flattened",
+    }
+`
 
 func GetIndexMapping(alias string, storageGroupResource schema.GroupResource) string {
 	resource := storageGroupResource.Resource
@@ -137,6 +167,8 @@ func GetIndexMapping(alias string, storageGroupResource schema.GroupResource) st
 		return fmt.Sprintf(mappingTemplate, alias, configmap)
 	case ResourceSecret:
 		return fmt.Sprintf(mappingTemplate, alias, secret)
+	case ResourceEvent:
+		return fmt.Sprintf(mappingTemplate, alias, event)
 	default:
 		return fmt.Sprintf(mappingTemplate, alias, common)
 	}
